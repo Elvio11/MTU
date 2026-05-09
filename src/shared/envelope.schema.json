@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Message Envelope",
+  "description": "All inter-agent messages must conform to this schema",
+  "type": "object",
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^AGT-\\d{2}$"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0.0"]
+    }
+  },
+  "required": ["envelope_id", "agent_id", "event_type", "timestamp_utc", "payload", "correlation_id", "schema_version"]
+}

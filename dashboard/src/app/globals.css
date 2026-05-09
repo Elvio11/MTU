@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --color-mtus-bg: #0f172a;
+  --color-mtus-card: #1e293b;
+  --color-mtus-accent: #3b82f6;
+  --color-profit: #22c55e;
+  --color-loss: #ef4444;
+  --color-warning: #f59e0b;
+  --color-muted: #64748b;
+}
+
+/* Dark theme (default) */
+body {
+  background-color: var(--color-mtus-bg);
+  color: #ededed;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Light theme */
+body.light {
+  --mtus-bg: #f8fafc;
+  --mtus-card: #ffffff;
+  --mtus-accent: #2563eb;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+body.light .bg-mtus-card {
+  background-color: #ffffff;
+  border-color: #e2e8f0;
+}
+
+body.light .bg-slate-800 {
+  background-color: #f1f5f9;
+}
+
+body.light .text-slate-300,
+body.light .text-slate-400 {
+  color: #475569;
+}
+
+body.light .text-white {
+  color: #1e293b;
+}
+
+/* Mobile-responsive adjustments */
+@media (max-width: 640px) {
+  .grid-cols-1.md\:grid-cols-2 {
+    grid-template-columns: 1fr;
+  }
+  
+  .text-2xl {
+    font-size: 1.5rem;
+  }
+  
+  .p-6 {
+    padding: 1rem;
+  }
+  
+  .gap-4 {
+    gap: 1rem;
+  }
+}
+
+/* Touch-friendly button sizes */
+button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Prevent text selection on interactive elements */
+button, select, input {
+  user-select: none;
+}
+
+/* Minimal transitions for interactive elements only */
+button, a, input, select {
+  transition: background-color 150ms ease, border-color 150ms ease;
+}

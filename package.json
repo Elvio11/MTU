@@ -1,0 +1,46 @@
+{
+  "name": "memetrader-unified-system",
+  "version": "1.0.0",
+  "description": "Solana Meme Coin Sniper & Trading Bot",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start:ares": "pm2 start dist/agents/ares_start.js --name ares-executor",
+    "start:sentinel": "pm2 start dist/agents/sentinel.js --name sentinel-monitor",
+    "start:janus": "pm2 start dist/agents/janus.js --name janus-sweep",
+    "start:all": "pm2 start ecosystem.config.js",
+    "test": "jest",
+    "test:python": "python -m pytest tests/ -v",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "@jup-ag/api": "^6.0.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.91.0",
+    "ajv": "^8.20.0",
+    "argon2": "^0.40.0",
+    "axios": "^1.6.0",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.3.0",
+    "ioredis": "^5.3.0",
+    "js-yaml": "^4.1.1",
+    "luxon": "^3.4.0",
+    "node-telegram-bot-api": "^0.64.0",
+    "sql.js": "^1.14.1",
+    "tweetnacl": "^1.0.3",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jest": "^29.5.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "jest": "^29.7.0",
+    "pm2": "^5.3.0",
+    "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.2.0"
+  }
+}
