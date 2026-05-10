@@ -4,6 +4,8 @@ import json
 import time
 import sqlite3
 import os
+import sys
+import yaml
 from typing import Dict
 from dotenv import load_dotenv
 
@@ -11,6 +13,8 @@ from dotenv import load_dotenv
 load_dotenv("./.env")
 
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
+from src.python.shared.config_validator import validate_config
+from src.python.shared.safe_output import safe_print as print
 from src.python.shared.constants import (
     CHANNEL_TOKEN_DETECTED,
     CHANNEL_TOKEN_QUALIFIED,
@@ -28,8 +32,11 @@ from src.python.shared.constants import (
 )
 
 
+from src.python.shared.config_validator import validate_config
+
 class LedgerAgent:
-    def __init__(self):
+    def __init__(self, config: Dict = None):
+        self.config = config or {}
         self.redis = None
         self.pubsub = None
         self.db = None
@@ -135,7 +142,25 @@ class LedgerAgent:
 
 
 if __name__ == "__main__":
-    agent = LedgerAgent()
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        sys.exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
+        # exit(1) # We can still run with defaults or warn
+
+    agent = LedgerAgent(config)
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:

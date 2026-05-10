@@ -3,6 +3,7 @@ import aioredis
 import aiohttp
 import json
 import os
+import sys
 import yaml
 import time
 from typing import Dict, List, Optional, Any
@@ -13,6 +14,7 @@ load_dotenv("./.env")
 
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
+from src.python.shared.safe_output import safe_print as print
 from src.python.shared.constants import (
     CHANNEL_POSITION_OPENED,
     CHANNEL_PRICE_UPDATED,
@@ -270,12 +272,12 @@ if __name__ == "__main__":
             config = yaml.safe_load(f)
     except Exception as e:
         print(f"[CONFIG] Error loading config: {e}")
-        exit(1)
+        sys.exit(1)
 
     is_valid, error = validate_config(config)
     if not is_valid:
         print(f"[CONFIG] Configuration validation failed: {error}")
-        exit(1)
+        sys.exit(1)
     print("[CONFIG] Configuration is valid")
 
     agent = OracleAgent(config)

@@ -3,15 +3,17 @@ import aioredis
 import json
 import requests
 import os
+import sys
 import yaml
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.constants import (
     CHANNEL_TOKEN_RECEIVED,
+    EVENT_TOKEN_RECEIVED,
 )
 from src.python.shared.bonding_curve import decode_bonding_curve, calculate_progress
 
@@ -93,7 +95,7 @@ class HydraAgent:
             # Construct discovery envelope
             envelope = AgentMessageEnvelope(
                 agent_id="AGT-12",
-                event_type=EventType.TOKEN_RECEIVED,
+                event_type=EVENT_TOKEN_RECEIVED,
                 payload={
                     "mint": mint,
                     "symbol": token_data.get("symbol", "UNKNOWN"),
@@ -106,10 +108,10 @@ class HydraAgent:
             )
             
             await self.redis.publish(CHANNEL_TOKEN_RECEIVED, envelope.model_dump_json())
-            self._processed_mints.add(mint)
             # Keep set size manageable
-            if len(self._processed_mints) > 1000:
+            if len(self._processed_mints) >= 1000:
                 self._processed_mints.clear()
+            self._processed_mints.add(mint)
 
     async def run(self):
         self.running = True
@@ -137,8 +139,22 @@ class HydraAgent:
             await self.redis.close()
 
 if __name__ == "__main__":
-    with open("config.yaml", "r") as f:
-        config = yaml.safe_load(f)
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+    
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        sys.exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
     
     agent = HydraAgent(config)
     try:

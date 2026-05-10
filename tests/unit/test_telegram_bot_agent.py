@@ -1,12 +1,12 @@
 import pytest
 import os
 import sys
-from unittest.mock import patch, MagicMock, AsyncMock
+import json
+import runpy
+import yaml
+from unittest.mock import patch, MagicMock, AsyncMock, mock_open
 import asyncio
-
-# Prevent the agent script from messing with the working directory during import
-with patch("os.chdir"):
-    import src.python.agents.telegram_bot_agent as telegram_agent
+import src.python.agents.telegram_bot_agent as telegram_agent
 
 @pytest.mark.asyncio
 async def test_telegram_bot_agent_main_success():
@@ -14,7 +14,7 @@ async def test_telegram_bot_agent_main_success():
     with patch("os.getenv") as mock_getenv:
         def getenv_side_effect(key, default=None):
             if key == "TELEGRAM_BOT_TOKEN":
-                return "fake_token"
+                return "fake_token_long_enough"
             if key == "TELEGRAM_ADMIN_CHAT_ID":
                 return "123456"
             if key == "TELEGRAM_OTP_SEED":
@@ -27,15 +27,13 @@ async def test_telegram_bot_agent_main_success():
         mock_bot.start = AsyncMock()
         mock_bot.stop = AsyncMock()
         
-        # We need to simulate the Event.wait() throwing KeyboardInterrupt to exit the infinite loop
-        # so we don't block the test forever.
         mock_event_wait = AsyncMock(side_effect=KeyboardInterrupt)
 
         with patch("src.python.shared.telegram_bot.create_bot", return_value=mock_bot) as mock_create_bot:
             with patch("asyncio.Event.wait", mock_event_wait):
                 await telegram_agent.main()
 
-        mock_create_bot.assert_called_once_with("fake_token", "123456", "fake_seed")
+        mock_create_bot.assert_called_once_with("fake_token_long_enough", "123456", "fake_seed")
         mock_bot.initialize.assert_awaited_once()
         mock_bot.start.assert_awaited_once()
         mock_bot.stop.assert_awaited_once()
@@ -50,12 +48,40 @@ async def test_telegram_bot_agent_main_missing_env():
             assert excinfo.value.code == 1
             mock_exit.assert_called_once_with(1)
 
-def test_telegram_bot_agent_name_main():
-    """Test __main__ block logic by running it as a script."""
-    with patch.object(telegram_agent, "__name__", "__main__"):
-        with patch("asyncio.run") as mock_run:
-            # We must use exec or reload to re-evaluate the module level code, or just test the if block logic directly if possible.
-            # But the if block is at module level. Let's just mock asyncio.run and run the script as __main__ using runpy
+def test_telegram_bot_agent_main_entry_point():
+    import runpy
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.telegram_bot_agent.open", m), \
+         patch("src.python.agents.telegram_bot_agent.main", new_callable=AsyncMock), \
+         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
+         patch("asyncio.run"):
+        try:
+            runpy.run_module("src.python.agents.telegram_bot_agent", run_name="__main__")
+        except SystemExit:
             pass
 
+def test_telegram_bot_agent_main_entry_point_error_loading(capsys):
+    import runpy
+    import builtins
+    original_open = builtins.open
+    def mocked_open(file, *args, **kwargs):
+        if str(file).endswith("config.yaml"):
+            raise Exception("load error")
+        return original_open(file, *args, **kwargs)
+    
+    with patch("builtins.open", side_effect=mocked_open):
+        # Telegram bot agent handles config error by setting config to {} which then fails validation
+        with pytest.raises(SystemExit):
+            runpy.run_module("src.python.agents.telegram_bot_agent", run_name="__main__")
+        captured = capsys.readouterr()
+        assert "[CONFIG] Configuration validation failed" in captured.out
 
+def test_telegram_bot_agent_main_entry_point_invalid_config(capsys):
+    import runpy
+    m = mock_open(read_data="invalid: yaml")
+    with patch("src.python.agents.telegram_bot_agent.open", m), \
+         patch("src.python.shared.config_validator.validate_config", return_value=(False, "validation error")):
+        with pytest.raises(SystemExit):
+            runpy.run_module("src.python.agents.telegram_bot_agent", run_name="__main__")
+        captured = capsys.readouterr()
+        assert "[CONFIG] Configuration validation failed: validation error" in captured.out

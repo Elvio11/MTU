@@ -17,7 +17,9 @@ os.chdir(project_root)
 
 # Load environment variables
 load_dotenv("./.env")
-print(f"[Telegram] Project root: {project_root}")
+from src.python.shared.safe_output import safe_print as print
+from src.python.shared.config_validator import validate_config
+import yaml
 
 
 async def main():
@@ -53,4 +55,17 @@ async def main():
 
 
 if __name__ == "__main__":  # pragma: no cover
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        config = {}
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
+
     asyncio.run(main())

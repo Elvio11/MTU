@@ -2,12 +2,16 @@ import asyncio
 import time
 import uuid
 import os
+import sys
+import yaml
 from typing import Dict
 from dotenv import load_dotenv
 
 load_dotenv("./.env")
 
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
+from src.python.shared.config_validator import validate_config
+from src.python.shared.safe_output import safe_print as print
 from src.python.shared.constants import is_paper_mode, CHANNEL_KILL_SWITCH_TRIGGERED, CHANNEL_HEALTH_CHECK
 
 HEALTH_CHECK_INTERVAL = 10
@@ -131,15 +135,23 @@ class HeraclesAgent:
 
 
 if __name__ == "__main__":
-    import yaml
-    import os
-
-    project_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
     config_path = os.path.join(project_root, "config", "config.yaml")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        sys.exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
+
     agent = HeraclesAgent(config)
     try:
         asyncio.run(agent.run())

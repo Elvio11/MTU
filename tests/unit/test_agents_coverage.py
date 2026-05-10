@@ -8,6 +8,7 @@ import sqlite3
 import time
 import uuid
 import pytest
+import runpy
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -579,3 +580,49 @@ async def test_bridge_stop(bridge):
 async def test_bridge_stop_no_connections():
     b = DashboardBridge()
     await b.stop()  # Should not raise
+
+import runpy
+
+def test_hermes_main_entry_point():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.hermes.open", m), \
+         patch("src.python.agents.hermes.HermesAgent.run", new_callable=AsyncMock), \
+         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
+         patch("asyncio.run"):
+        try:
+            runpy.run_module("src.python.agents.hermes", run_name="__main__")
+        except SystemExit:
+            pass
+
+def test_ledger_main_entry_point():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.ledger.open", m), \
+         patch("src.python.agents.ledger.LedgerAgent.run", new_callable=AsyncMock), \
+         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
+         patch("asyncio.run"):
+        try:
+            runpy.run_module("src.python.agents.ledger", run_name="__main__")
+        except SystemExit:
+            pass
+
+def test_dashboard_bridge_main_entry_point():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.dashboard_bridge.open", m), \
+         patch("src.python.agents.dashboard_bridge.DashboardBridge.run", new_callable=AsyncMock), \
+         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
+         patch("asyncio.run"):
+        try:
+            runpy.run_module("src.python.agents.dashboard_bridge", run_name="__main__")
+        except SystemExit:
+            pass
+
+def test_telegram_bot_main_entry_point():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.telegram_bot_agent.open", m), \
+         patch("src.python.agents.telegram_bot_agent.main", new_callable=AsyncMock), \
+         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
+         patch("asyncio.run"):
+        try:
+            runpy.run_module("src.python.agents.telegram_bot_agent", run_name="__main__")
+        except SystemExit:
+            pass

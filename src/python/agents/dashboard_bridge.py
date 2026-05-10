@@ -2,8 +2,13 @@ import asyncio
 import aioredis
 import json
 import os
-from typing import Set
+import sys
 import websockets
+import yaml
+from typing import Dict, Any, Set
+from src.python.shared.envelope import AgentMessageEnvelope, EventType
+from src.python.shared.config_validator import validate_config
+from src.python.shared.safe_output import safe_print as print
 from src.python.shared.constants import (
     CHANNEL_POSITION_OPENED,
     CHANNEL_POSITION_CLOSED,
@@ -17,9 +22,10 @@ from src.python.shared.constants import (
 class DashboardBridge:
     """AGT-11: Bridge Redis pub/sub to WebSocket clients"""
 
-    def __init__(self, redis_url: str = "redis://localhost:6379", ws_port: int = 3001):
-        self.redis_url = redis_url
-        self.ws_port = ws_port
+    def __init__(self, config: Dict[str, Any] = None):
+        self.config = config or {}
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.ws_port = 3001
         self.clients = set()
         self.redis = None
         self.pubsub = None
@@ -106,7 +112,24 @@ class DashboardBridge:
 
 
 if __name__ == "__main__":
-    bridge = DashboardBridge()
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        sys.exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
+
+    bridge = DashboardBridge(config)
     try:
         asyncio.run(bridge.run())
     except KeyboardInterrupt:

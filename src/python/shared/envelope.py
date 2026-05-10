@@ -14,6 +14,8 @@ AgentId = Literal[
     "AGT-08",
     "AGT-09",
     "AGT-10",
+    "AGT-11",
+    "AGT-12",
 ]
 
 EventType = Literal[
