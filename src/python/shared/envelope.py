@@ -43,6 +43,7 @@ EventType = Literal[
     "social_scored",
     "kill_switch_triggered",
     "token_migrated",
+    "token_activity",
 ]
 
 

@@ -1,15 +1,18 @@
 import asyncio
 import aioredis
 import aiohttp
-import time
+import json
 import os
-from typing import Dict, List, Optional
+import yaml
+import time
+from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 
 # Load .env file
 load_dotenv("./.env")
 
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
+from src.python.shared.config_validator import validate_config
 from src.python.shared.constants import (
     CHANNEL_POSITION_OPENED,
     CHANNEL_PRICE_UPDATED,
@@ -30,7 +33,8 @@ SOL_TOKEN_ID = "solana"
 
 
 class OracleAgent:
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.redis = None
         self.pubsub = None
         self.positions: Dict[str, Dict] = {}
@@ -237,6 +241,8 @@ class OracleAgent:
                 await asyncio.sleep(POLLING_INTERVAL)
             except Exception as e:
                 print(f"AGT-04: Error in run loop: {e}")
+                if "stop loop" in str(e):
+                    break
                 await asyncio.sleep(1)
 
     async def stop(self):
@@ -251,7 +257,28 @@ class OracleAgent:
 
 
 if __name__ == "__main__":
-    agent = OracleAgent()
+    # Find project root
+
+    # Find project root
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        exit(1)
+    print("[CONFIG] Configuration is valid")
+
+    agent = OracleAgent(config)
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:

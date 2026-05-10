@@ -3,9 +3,11 @@ import aioredis
 import aiohttp
 import json
 import os
-from typing import Dict, Optional
+import yaml
+from typing import Dict, Optional, Any
 from dotenv import load_dotenv
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
+from src.python.shared.config_validator import validate_config
 from src.python.shared.constants import (
     CHANNEL_SOCIAL_SCORED,
     CHANNEL_TOKEN_RECEIVED_SOCIAL,
@@ -18,7 +20,8 @@ TWITTER_API_V2 = "https://api.twitter.com/2/tweets/counts"
 
 
 class CassandraAgent:
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.redis = None
         self.pubsub = None
         self.running = False
@@ -68,65 +71,69 @@ class CassandraAgent:
         return socials
 
     async def score_sentiment(self, token_payload: Dict) -> float:
-        score = 50.0
-        socials = {"twitter": False, "telegram": False, "website": False}
+        try:
+            score = 50.0
+            socials = {"twitter": False, "telegram": False, "website": False}
 
-        mint = token_payload.get("mint", "")
-        uri = token_payload.get("uri", "")
+            mint = token_payload.get("mint", "")
+            uri = token_payload.get("uri", "")
 
-        if mint:
-            dex_data = await self.fetch_dexscreener_data(mint)
-            if dex_data:
-                info = dex_data.get("info", {})
-                twitter = info.get("twitter")
-                telegram = info.get("telegram")
-                website = info.get("website")
+            if mint:
+                dex_data = await self.fetch_dexscreener_data(mint)
+                if dex_data:
+                    info = dex_data.get("info", {})
+                    twitter = info.get("twitter")
+                    telegram = info.get("telegram")
+                    website = info.get("website")
 
-                if twitter:
+                    if twitter:
+                        score += 15
+                        socials["twitter"] = True
+                    if telegram:
+                        score += 15
+                        socials["telegram"] = True
+                    if website:
+                        score += 10
+                        socials["website"] = True
+
+                    liquidity = dex_data.get("liquidity", {}).get("usd", 0)
+                    if liquidity > 100000:
+                        score += 10
+                    elif liquidity > 10000:
+                        score += 5
+
+                    tx_count_24h = dex_data.get("txns", {}).get("h24", {})
+                    buys = tx_count_24h.get("buys", 0)
+                    sells = tx_count_24h.get("sells", 0)
+                    if buys + sells > 100:
+                        score += 5
+                    if buys > sells:
+                        score += 5
+                    elif sells > buys * 2:
+                        score -= 10
+
+            if not any(socials.values()) and uri:
+                metadata_socials = await self.fetch_metadata_socials(uri)
+                if metadata_socials["twitter"]:
                     score += 15
                     socials["twitter"] = True
-                if telegram:
+                if metadata_socials["telegram"]:
                     score += 15
                     socials["telegram"] = True
-                if website:
+                if metadata_socials["website"]:
                     score += 10
                     socials["website"] = True
 
-                liquidity = dex_data.get("liquidity", {}).get("usd", 0)
-                if liquidity > 10000:
-                    score += 5
-                elif liquidity > 100000:
-                    score += 10
+            token_age = token_payload.get("age", 0)
+            if token_age > 86400:
+                score += 5
+            elif token_age < 3600:
+                score -= 5
 
-                tx_count_24h = dex_data.get("txns", {}).get("h24", {})
-                buys = tx_count_24h.get("buys", 0)
-                sells = tx_count_24h.get("sells", 0)
-                if buys + sells > 100:
-                    score += 5
-                if buys > sells:
-                    score += 5
-                elif sells > buys * 2:
-                    score -= 10
-
-        if not any(socials.values()) and uri:
-            metadata_socials = await self.fetch_metadata_socials(uri)
-            if metadata_socials["twitter"]:
-                score += 15
-                socials["twitter"] = True
-            if metadata_socials["telegram"]:
-                score += 15
-                socials["telegram"] = True
-            if metadata_socials["website"]:
-                score += 10
-                socials["website"] = True
-
-        token_age = token_payload.get("age", 0)
-        if token_age > 86400:
-            score += 5
-        elif token_age < 3600:
-            score -= 5
-
-        return min(max(score, 0), 100)
+            return min(max(score, 0), 100)
+        except Exception as e:
+            print(f"AGT-08: Scoring error: {e}")
+            return 0.0
 
     async def handle_token_received(self, envelope_json: str):
         try:
@@ -181,6 +188,8 @@ class CassandraAgent:
                 await asyncio.sleep(0.01)
             except Exception as e:
                 print(f"AGT-08: Error in run loop: {e}")
+                if "stop loop" in str(e):
+                    break
                 await asyncio.sleep(1)
 
     async def stop(self):
@@ -195,7 +204,28 @@ class CassandraAgent:
 
 
 if __name__ == "__main__":
-    agent = CassandraAgent()
+    # Find project root
+
+    # Find project root
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        exit(1)
+    print("[CONFIG] Configuration is valid")
+
+    agent = CassandraAgent(config)
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:

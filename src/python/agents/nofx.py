@@ -1,13 +1,15 @@
 import asyncio
 import json
-import websockets
-import aioredis
 import os
 import re
+import yaml
+import websockets
+import aioredis
 import requests
+from typing import Dict, Any, List, Optional
 from datetime import datetime
-from typing import Optional
 from dotenv import load_dotenv
+from src.python.shared.config_validator import validate_config
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.token_payload import PumpPortalTokenPayload
@@ -31,7 +33,8 @@ RAYDIUM_AMM_V4 = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
 
 
 class NofxAgent:
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.is_paper_mode = is_paper_mode()
         self.redis = None
         self.ws = None
@@ -254,11 +257,13 @@ class NofxAgent:
             print(
                 f"AGT-01: [KOTH] KING OF THE HILL: {payload.get('mint', '')[:8]}... at {payload.get('bondingCurveProgress', 0):.1f}%"
             )
+            await self._handle_new_token(payload)
 
         elif tx_type == "graduatingSoon":
             print(
                 f"AGT-01: [GRADUATE] GRADUATING SOON: {payload.get('mint', '')[:8]}... at {payload.get('bondingCurveProgress', 0):.1f}%"
             )
+            await self._handle_new_token(payload)
 
         elif tx_type in ("buy", "sell"):
             source = payload.get("source", "bonding_curve")
@@ -306,8 +311,6 @@ class NofxAgent:
                     "mint",
                     "name",
                     "symbol",
-                    "uri",
-                    "initialBuy",
                     "marketCapSol",
                 ],
             }
@@ -317,8 +320,8 @@ class NofxAgent:
                 "mint": payload["mint"],
                 "name": payload["name"],
                 "symbol": payload["symbol"],
-                "uri": payload["uri"],
-                "initialBuy": payload["initialBuy"],
+                "uri": payload.get("uri", ""),
+                "initialBuy": payload.get("initialBuy", 0),
                 "marketCapSol": payload["marketCapSol"],
                 "bondingCurveKey": payload.get("bondingCurveKey", ""),
                 "vSolInBondingCurve": payload.get("vSolInBondingCurve", 0),
@@ -352,9 +355,14 @@ class NofxAgent:
             )
 
     async def _handle_token_activity(self, payload: dict):
+        token = None
         try:
             token_data = {
                 "mint": payload["mint"],
+                "name": payload.get("name", "Unknown"),
+                "symbol": payload.get("symbol", "???"),
+                "uri": payload.get("uri") or None,  # None avoids HTTPS validator on empty string
+                "initialBuy": payload.get("initialBuy", 0),
                 "marketCapSol": payload.get("marketCapSol", 0),
                 "vSolInBondingCurve": payload.get("vSolInBondingCurve", 0),
                 "bondingCurveProgress": payload.get("bondingCurveProgress", 0),
@@ -363,6 +371,9 @@ class NofxAgent:
         except Exception as e:
             # We expect missing name/symbol here, so we ignore validation errors for activity
             pass
+
+        if token is None:
+            return
 
         envelope = AgentMessageEnvelope(
             agent_id="AGT-01", event_type="token_activity", payload=token.model_dump()
@@ -376,7 +387,7 @@ class NofxAgent:
     async def _publish_migration(self, payload: dict):
         try:
             mint = payload.get("mint", "")
-            if mint in self._seen_mints:
+            if not mint or mint in self._seen_mints:
                 return
             self._seen_mints.add(mint)
 
@@ -515,44 +526,53 @@ class NofxAgent:
             delay = min(delay * 2, RECONNECT_MAX_DELAY)
 
         while self.running:
-            if not await self.check_trading_state():
-                await asyncio.sleep(5)
-                continue
-
             try:
-                if self.ws:
-                    try:
-                        ws_closed = self.ws.close_code is not None
-                    except:
-                        ws_closed = True
-                else:
-                    ws_closed = True
-            except Exception as e:
-                ws_closed = True
-                print(f"AGT-01: WS closed check error: {e}")
-
-            if not self.ws or ws_closed:
-                print("AGT-01: WS not connected, using HTTP polling fallback")
-                await self.poll_for_tokens_http()
-
-                if not await self.connect_pumpdev(delay):
-                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                if not await self.check_trading_state():
                     await asyncio.sleep(5)
                     continue
-                delay = RECONNECT_BASE_DELAY
-            else:
+
                 try:
-                    message = await asyncio.wait_for(self.ws.recv(), timeout=1.0)
-                    if isinstance(message, bytes):
-                        message = message.decode("utf-8")
-                    payload = json.loads(message)
-                    msg_type = payload.get("type") or payload.get("txType")
-                    print(f"AGT-01: Received: type={msg_type}")
-                    await self.handle_pumpdev_message(payload)
-                except asyncio.TimeoutError:
-                    pass
+                    if self.ws:
+                        try:
+                            ws_closed = self.ws.close_code is not None
+                        except:
+                            ws_closed = True
+                    else:
+                        ws_closed = True
                 except Exception as e:
-                    print(f"AGT-01: Error: {e}")
+                    ws_closed = True
+                    print(f"AGT-01: WS closed check error: {e}")
+
+                if not self.ws or ws_closed:
+                    print("AGT-01: WS not connected, using HTTP polling fallback")
+                    await self.poll_for_tokens_http()
+
+                    if not await self.connect_pumpdev(delay):
+                        delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                        await asyncio.sleep(5)
+                        continue
+                    delay = RECONNECT_BASE_DELAY
+                else:
+                    try:
+                        message = await asyncio.wait_for(self.ws.recv(), timeout=1.0)
+                        if isinstance(message, bytes):
+                            message = message.decode("utf-8")
+                        payload = json.loads(message)
+                        msg_type = payload.get("type") or payload.get("txType")
+                        print(f"AGT-01: Received: type={msg_type}")
+                        await self.handle_pumpdev_message(payload)
+                    except asyncio.TimeoutError:
+                        pass
+                    except Exception as e:
+                        print(f"AGT-01: Error: {e}")
+                        if "stop" in str(e):
+                            break
+                        await asyncio.sleep(1)
+            except Exception as e:
+                print(f"AGT-01: Error in run loop body: {e}")
+                if "stop" in str(e):
+                    break
+                await asyncio.sleep(1)
 
     async def stop(self):
         self.running = False
@@ -585,7 +605,28 @@ class NofxAgent:
 
 
 if __name__ == "__main__":
-    agent = NofxAgent()
+    # Find project root
+
+    # Find project root
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        exit(1)
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        exit(1)
+    print("[CONFIG] Configuration is valid")
+
+    agent = NofxAgent(config)
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:

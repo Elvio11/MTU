@@ -3,8 +3,10 @@ import aioredis
 import json
 import requests
 import os
+import yaml
 from typing import Dict, Any
 from dotenv import load_dotenv
+from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.circuit_breaker import CircuitBreaker
@@ -403,6 +405,25 @@ class AnansiAgent:
             print(f"AGT-03: G8 check failed: {e}")
             return False
 
+    async def check_g7_liquidity_size(self, token_payload: Dict[str, Any]) -> bool:
+        """G7: Check if liquidity is sufficient (if available in payload)"""
+        market_cap = token_payload.get("market_cap", 0)
+        min_mcap = self.config.get("qualification", {}).get("min_market_cap_sol", 5)
+        print(f"AGT-03: G7 Market Cap: {market_cap:.2f} SOL (min: {min_mcap} SOL)")
+        return market_cap >= min_mcap
+
+    async def check_g11_sentiment(self, mint: str) -> bool:
+        """G11: Placeholder for sentiment score check (X/Social)"""
+        # In a real scenario, this would call Cassandra or a social API
+        return True
+
+    async def check_g12_bonding_curve(self, token_payload: Dict[str, Any]) -> bool:
+        """G12: Check bonding curve progression momentum"""
+        progress = token_payload.get("bonding_curve_progress", 0)
+        min_progress = self.config.get("qualification", {}).get("min_bonding_curve_progress", 35)
+        print(f"AGT-03: G12 Bonding Curve Progress: {progress:.2f}% (min: {min_progress}%)")
+        return progress >= min_progress
+
     async def check_g7_market_cap(self, market_cap: float) -> bool:
         min_mcap = self.config["qualification"]["min_market_cap_sol"]
         max_mcap = self.config["qualification"]["max_market_cap_sol"]
@@ -456,151 +477,180 @@ class AnansiAgent:
     ) -> bool:
         mint = token_payload["mint"]
         symbol = token_payload.get("symbol", "UNKNOWN")
-
-        self._rugcheck_cache.clear()
-
-        print(
-            f"AGT-03: [{'PAPER' if self.is_paper_mode else 'PROD'}] Running safety qualification for {symbol}"
-        )
-
         gates_passed = []
         gates_failed = []
+        try:
+            self._rugcheck_cache.clear()
 
-        mcap = token_payload.get("marketCapSol", 0)
-        if mcap >= 5 and mcap <= 150:
-            gates_passed.append("G7")
-            print(f"AGT-03: G7 Market Cap {mcap} SOL - PASS")
-        else:
-            gates_failed.append("G7")
-            print(f"AGT-03: G7 Market Cap {mcap} SOL - FAIL (range: 5-150)")
-            await self.publish_rejection(
-                token_payload, gates_passed, gates_failed, correlation_id
-            )
-            return False
-
-        v_sol_in_curve_raw = token_payload.get("vSolInBondingCurve", 0)
-        v_sol_in_curve = v_sol_in_curve_raw / 1_000_000_000
-        min_virtual_sol = self.config.get("qualification", {}).get(
-            "min_virtual_sol_reserves", 30
-        )
-        if v_sol_in_curve >= min_virtual_sol:
-            gates_passed.append("G11")
             print(
-                f"AGT-03: G11 Bonding Curve {v_sol_in_curve:.1f} SOL - PASS (min: {min_virtual_sol})"
+                f"AGT-03: [{'PAPER' if self.is_paper_mode else 'PROD'}] Running safety qualification for {symbol}"
             )
-        else:
-            gates_failed.append("G11")
-            print(
-                f"AGT-03: G11 Bonding Curve {v_sol_in_curve:.1f} SOL - FAIL (min: {min_virtual_sol})"
+
+            mcap = token_payload.get("marketCapSol", 0)
+            if mcap >= 5 and mcap <= 150:
+                gates_passed.append("G7")
+                print(f"AGT-03: G7 Market Cap {mcap} SOL - PASS")
+            else:
+                gates_failed.append("G7")
+                print(f"AGT-03: G7 Market Cap {mcap} SOL - FAIL (range: 5-150)")
+                await self.publish_rejection(
+                    token_payload, gates_passed, gates_failed, correlation_id
+                )
+                return False
+
+            v_sol_in_curve_raw = token_payload.get("vSolInBondingCurve", 0)
+            v_sol_in_curve = v_sol_in_curve_raw / 1_000_000_000
+            min_virtual_sol = self.config.get("qualification", {}).get(
+                "min_virtual_sol_reserves", 30
             )
-            await self.publish_rejection(
-                token_payload, gates_passed, gates_failed, correlation_id
+            if v_sol_in_curve >= min_virtual_sol:
+                gates_passed.append("G11")
+                print(
+                    f"AGT-03: G11 Bonding Curve {v_sol_in_curve:.1f} SOL - PASS (min: {min_virtual_sol})"
+                )
+            else:
+                gates_failed.append("G11")
+                print(
+                    f"AGT-03: G11 Bonding Curve {v_sol_in_curve:.1f} SOL - FAIL (min: {min_virtual_sol})"
+                )
+                await self.publish_rejection(
+                    token_payload, gates_passed, gates_failed, correlation_id
+                )
+                return False
+
+            # G12: Bonding Curve Progress %
+            progress = token_payload.get("bondingCurveProgress", 0)
+            min_progress = self.config.get("qualification", {}).get(
+                "min_bonding_curve_progress", 0
             )
-            return False
+            if progress >= min_progress:
+                gates_passed.append("G12")
+                print(f"AGT-03: G12 Progress {progress:.1f}% - PASS (min: {min_progress}%)")
+            else:
+                gates_failed.append("G12")
+                print(f"AGT-03: G12 Progress {progress:.1f}% - FAIL (min: {min_progress}%)")
+                await self.publish_rejection(
+                    token_payload, gates_passed, gates_failed, correlation_id
+                )
+                return False
 
-        # G12: Bonding Curve Progress %
-        progress = token_payload.get("bondingCurveProgress", 0)
-        min_progress = self.config.get("qualification", {}).get(
-            "min_bonding_curve_progress", 0
-        )
-        if progress >= min_progress:
-            gates_passed.append("G12")
-            print(f"AGT-03: G12 Progress {progress:.1f}% - PASS (min: {min_progress}%)")
-        else:
-            gates_failed.append("G12")
-            print(f"AGT-03: G12 Progress {progress:.1f}% - FAIL (min: {min_progress}%)")
-            await self.publish_rejection(
-                token_payload, gates_passed, gates_failed, correlation_id
-            )
-            return False
+            print(f"AGT-03: About to call G1 check for mint: {mint}")
+            if await self.check_g1_mint_authority(mint):
+                gates_passed.append("G1")
+                print(f"AGT-03: G1 Mint Authority - PASS")
+            else:
+                gates_failed.append("G1")
+                print(f"AGT-03: G1 Mint Authority - FAIL")
 
-        print(f"AGT-03: About to call G1 check for mint: {mint}")
-        if await self.check_g1_mint_authority(mint):
-            gates_passed.append("G1")
-            print(f"AGT-03: G1 Mint Authority - PASS")
-        else:
-            gates_failed.append("G1")
-            print(f"AGT-03: G1 Mint Authority - FAIL")
+            if await self.check_g2_freeze_authority(mint):
+                gates_passed.append("G2")
+                print(f"AGT-03: G2 Freeze Authority - PASS")
+            else:
+                gates_failed.append("G2")
+                print(f"AGT-03: G2 Freeze Authority - FAIL")
 
-        if await self.check_g2_freeze_authority(mint):
-            gates_passed.append("G2")
-            print(f"AGT-03: G2 Freeze Authority - PASS")
-        else:
-            gates_failed.append("G2")
-            print(f"AGT-03: G2 Freeze Authority - FAIL")
+            v_sol_raw = token_payload.get("vSolInBondingCurve", 0)
+            v_sol_in_curve = v_sol_raw / 1_000_000_000 if v_sol_raw else 0
+            is_on_bonding_curve = 0 < v_sol_in_curve < 85
+            is_migrated = v_sol_in_curve == 0
 
-        v_sol_raw = token_payload.get("vSolInBondingCurve", 0)
-        v_sol_in_curve = v_sol_raw / 1_000_000_000 if v_sol_raw else 0
-        is_on_bonding_curve = 0 < v_sol_in_curve < 85
-        is_migrated = v_sol_in_curve == 0
-
-        if self.is_paper_mode:
-            print(f"AGT-03: [PAPER] Would run G3-G9 checks in production mode")
-            gates_passed.extend(["G3", "G4", "G5", "G6", "G8", "G9"])
-        else:
-            if is_migrated:
-                if await self.check_g3_lp_lock(mint):
+            if self.is_paper_mode:
+                print(f"AGT-03: [PAPER] Would run G3-G9 checks in production mode")
+                gates_passed.extend(["G3", "G4", "G5", "G6", "G8", "G9"])
+            else:
+                if is_migrated:
+                    if await self.check_g3_lp_lock(mint):
+                        gates_passed.append("G3")
+                        print(f"AGT-03: G3 LP Lock - PASS (migrated token)")
+                    else:
+                        gates_failed.append("G3")
+                        print(f"AGT-03: G3 LP Lock - FAIL")
+                else:
+                    print(
+                        f"AGT-03: G3 LP Lock - AUTO-PASS (bonding curve, LP burns at PumpSwap migration)"
+                    )
                     gates_passed.append("G3")
-                    print(f"AGT-03: G3 LP Lock - PASS (migrated token)")
-                else:
-                    gates_failed.append("G3")
-                    print(f"AGT-03: G3 LP Lock - FAIL")
-            else:
-                print(
-                    f"AGT-03: G3 LP Lock - AUTO-PASS (bonding curve, LP burns at PumpSwap migration)"
-                )
-                gates_passed.append("G3")
 
-            print(f"AGT-03: G4 Dev Holdings - DISABLED (pump.fun tokens)")
-            gates_passed.append("G4")
+                print(f"AGT-03: G4 Dev Holdings - DISABLED (pump.fun tokens)")
+                gates_passed.append("G4")
 
-            if is_on_bonding_curve:
-                print(
-                    f"AGT-03: G5 Top 10 Concentration - AUTO-PASS (new token, <10 holders)"
-                )
-                gates_passed.append("G5")
-            else:
-                if await self.check_g5_top10_concentration(mint):
+                if is_on_bonding_curve:
+                    print(
+                        f"AGT-03: G5 Top 10 Concentration - AUTO-PASS (new token, <10 holders)"
+                    )
                     gates_passed.append("G5")
-                    print(f"AGT-03: G5 Top 10 Concentration - PASS")
                 else:
-                    gates_failed.append("G5")
-                    print(f"AGT-03: G5 Top 10 Concentration - FAIL")
+                    if await self.check_g5_top10_concentration(mint):
+                        gates_passed.append("G5")
+                        print(f"AGT-03: G5 Top 10 Concentration - PASS")
+                    else:
+                        gates_failed.append("G5")
+                        print(f"AGT-03: G5 Top10 Concentration - FAIL")
 
-            if await self.check_g6_rugcheck_score(mint):
-                gates_passed.append("G6")
-                print(f"AGT-03: G6 RugCheck Score - PASS")
+                if await self.check_g6_rugcheck_score(mint):
+                    gates_passed.append("G6")
+                    print(f"AGT-03: G6 RugCheck Score - PASS")
+                else:
+                    gates_failed.append("G6")
+                    print(f"AGT-03: G6 RugCheck Score - FAIL")
+
+                uri = token_payload.get("uri", "")
+                if uri and await self.check_g8_social_metadata(uri):
+                    gates_passed.append("G8")
+                    print(f"AGT-03: G8 Social Metadata - PASS")
+                else:
+                    gates_failed.append("G8")
+                    print(f"AGT-03: G8 Social Metadata - FAIL")
+
+                if await self.check_g9_duplicate(mint):
+                    gates_passed.append("G9")
+                    print(f"AGT-03: G9 Duplicate Check - PASS")
+                else:
+                    gates_failed.append("G9")
+                    print(f"AGT-03: G9 Duplicate Check - FAIL")
+
+            if not self.is_paper_mode:
+                if await self.check_g10_honeypot(mint):
+                    gates_passed.append("G10")
+                    print(f"AGT-03: G10 Honeypot - PASS")
+                else:
+                    gates_failed.append("G10")
+                    print(f"AGT-03: G10 Honeypot - FAIL")
+
+                if await self.check_g7_liquidity_size(token_payload):
+                    gates_passed.append("G7")
+                    print(f"AGT-03: G7 Liquidity - PASS")
+                else:
+                    gates_failed.append("G7")
+                    print(f"AGT-03: G7 Liquidity - FAIL")
+
+                if await self.check_g11_sentiment(mint):
+                    gates_passed.append("G11")
+                    print(f"AGT-03: G11 Sentiment - PASS")
+                else:
+                    gates_failed.append("G11")
+                    print(f"AGT-03: G11 Sentiment - FAIL")
+
+                if await self.check_g12_bonding_curve(token_payload):
+                    gates_passed.append("G12")
+                    print(f"AGT-03: G12 Bonding Curve - PASS")
+                else:
+                    gates_failed.append("G12")
+                    print(f"AGT-03: G12 Bonding Curve - FAIL")
+
+            if self.is_paper_mode:
+                required_gates = ["G1", "G2", "G7", "G10", "G11", "G12"]
             else:
-                gates_failed.append("G6")
-                print(f"AGT-03: G6 RugCheck Score - FAIL")
+                required_gates = [
+                    "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12"
+                ]
+        except Exception as e:
+            print(f"AGT-03: Qualification error for {symbol}: {e}")
+            await self.publish_rejection(
+                token_payload, gates_passed, gates_failed, correlation_id
+            )
+            return False
 
-            uri = token_payload.get("uri", "")
-            if uri and await self.check_g8_social_metadata(uri):
-                gates_passed.append("G8")
-                print(f"AGT-03: G8 Social Metadata - PASS")
-            else:
-                gates_failed.append("G8")
-                print(f"AGT-03: G8 Social Metadata - FAIL")
-
-            if await self.check_g9_duplicate(mint):
-                gates_passed.append("G9")
-                print(f"AGT-03: G9 Duplicate Check - PASS")
-            else:
-                gates_failed.append("G9")
-                print(f"AGT-03: G9 Duplicate Check - FAIL")
-
-        if not self.is_paper_mode:
-            if await self.check_g10_honeypot(mint):
-                gates_passed.append("G10")
-                print(f"AGT-03: G10 Honeypot - PASS")
-            else:
-                gates_failed.append("G10")
-                print(f"AGT-03: G10 Honeypot - FAIL")
-
-        if self.is_paper_mode:
-            required_gates = ["G1", "G2", "G7", "G10", "G11"]
-        else:
-            required_gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G10", "G11"]
         missing_gates = [g for g in required_gates if g in gates_failed]
 
         if missing_gates:
@@ -688,6 +738,9 @@ class AnansiAgent:
                 await asyncio.sleep(0.01)
             except Exception as e:
                 print(f"AGT-03: Error in run loop: {e}")
+                if "stop" in str(e):
+                    break
+                await asyncio.sleep(1)
 
     async def stop(self):
         self.running = False
@@ -801,21 +854,24 @@ class AnansiAgent:
 
 
 if __name__ == "__main__":
-    import yaml
-    import os
+    # Find project root
 
-    project_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    # Find project root
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
     config_path = os.path.join(project_root, "config", "config.yaml")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
 
-    from src.python.shared.config_validator import validate_config
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CONFIG] Error loading config: {e}")
+        exit(1)
 
     is_valid, error = validate_config(config)
     if not is_valid:
-        print("[CONFIG] Configuration validation failed: " + str(error))
+        print(f"[CONFIG] Configuration validation failed: {error}")
         exit(1)
     print("[CONFIG] Configuration is valid")
 
