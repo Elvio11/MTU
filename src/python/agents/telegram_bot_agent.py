@@ -25,6 +25,20 @@ import yaml
 async def main():
     from src.python.shared.telegram_bot import create_bot
 
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    config_path = os.path.join(project_root, "config", "config.yaml")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        config = {}
+
+    is_valid, error = validate_config(config)
+    if not is_valid:
+        print(f"[CONFIG] Configuration validation failed: {error}")
+        sys.exit(1)
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     admin_chat_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     otp_seed = os.getenv("TELEGRAM_OTP_SEED", "default_seed_change_me")
@@ -43,7 +57,6 @@ async def main():
     print("=" * 50)
 
     bot = create_bot(token, admin_chat_id, otp_seed)
-    await bot.initialize()
     await bot.start()
 
     # Keep running
@@ -55,17 +68,4 @@ async def main():
 
 
 if __name__ == "__main__":  # pragma: no cover
-    config_path = os.path.join(project_root, "config", "config.yaml")
-
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-    except Exception as e:
-        config = {}
-
-    is_valid, error = validate_config(config)
-    if not is_valid:
-        print(f"[CONFIG] Configuration validation failed: {error}")
-        sys.exit(1)
-
     asyncio.run(main())

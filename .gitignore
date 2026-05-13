@@ -17,6 +17,17 @@ bot.log
 ares.log
 scratch/
 test_results_*.txt
+test_results_py.txt
+test_results_ts.txt
+ts_agents_cov*.txt
+all_tests_output.txt
+readiness*.txt
+test_output_shared*.txt
+final_coverage.txt
+.coverage
+coverage/
+coverage.json
+test-results/
 mtus.db
 redis.zip
 redis/
@@ -41,6 +52,7 @@ graphify-out/
 !/requirements.txt
 /*.html
 /*.bak
+*.bak
 incident_report.json
 
 # Ignore sensitive data and configs

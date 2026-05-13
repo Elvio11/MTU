@@ -7,6 +7,7 @@ import { CircuitBreaker } from '../shared/circuit-breaker';
 import { isOperationalWindowActive } from '../shared/operational-window';
 import { CHANNEL_TRADE_APPROVED, CHANNEL_TRADE_FAILED, CHANNEL_POSITION_OPENED } from '../shared/channels';
 import Redis from 'ioredis';
+import { createRedisClient } from '../shared/redis';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { insertPosition, updatePosition, insertAuditLog } from '../shared/db';
@@ -26,24 +27,6 @@ const RENT_ATA = 2039280;    // 0.00204 SOL - Rent for new Token ATA
 const RENT_WSOL = 0;          // 0.0 SOL - Wallet likely has wSOL already
 const FEE_BUFFER = 50000000;   // 0.0005 SOL - Buffer for network fees
 
-// Helper: Get current SOL price in USD
-async function getSolPriceUsd(): Promise<number> {
-  try {
-    const response = await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112', {
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!response.ok) throw new Error(`Price fetch failed: ${response.status}`);
-    const data: any = await response.json();
-    const price = data?.data?.So11111111111111111111111111111111111111112?.price;
-    if (price && typeof price === 'number' && price > 0) {
-      return price;
-    }
-    throw new Error('No price in response');
-  } catch (e) {
-    console.log(`AGT-05: [PRICE] Using fallback SOL price: $200`);
-    return 200; // Fallback to approximate price
-  }
-}
 
 // Helper: Determine which Jupiter API to use based on USD value
 async function getJupiterApiVersion(positionSizeSol: number): Promise<{ version: 'v1' | 'v2', usdValue: number }> {
@@ -108,7 +91,7 @@ interface OpenPosition {
   peak_price_sol: number;
 }
 
-const IS_PAPER_MODE = (process.env.MTUS_ENVIRONMENT || 'paper').toLowerCase() === 'paper';
+// Paper mode helper moved to AresAgent.isPaperMode()
 // Consts moved to config
 
 
@@ -208,10 +191,29 @@ class RateLimiter {
   }
 }
 
+export async function getSolPriceUsd(config?: any): Promise<number> {
+  try {
+    const response = await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112', {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!response.ok) throw new Error(`Price fetch failed: ${response.status}`);
+    const data: any = await response.json();
+    const price = data?.data?.So11111111111111111111111111111111111111112?.price;
+    if (price && typeof price === 'number' && price > 0) {
+      return price;
+    }
+    throw new Error('No price in response');
+  } catch (e) {
+    console.log(`AGT-05: [PRICE] Using fallback SOL price: $200`);
+    return 200; // Fallback to approximate price
+  }
+}
+
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL_MS = 1000;  // 1 second between Jupiter requests
 
-async function rateLimitedRequest<T>(requestFn: () => Promise<T>): Promise<T> {
+export async function rateLimitedRequest<T>(requestFn: (baseUrl: string) => Promise<T>, config?: any): Promise<T> {
+  const baseUrl = config?.trading?.jupiter_api_url || 'https://quote-api.jup.ag/v6';
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
 
@@ -222,7 +224,7 @@ async function rateLimitedRequest<T>(requestFn: () => Promise<T>): Promise<T> {
   lastRequestTime = Date.now();
 
   try {
-    return await requestFn();
+    return await requestFn(baseUrl);
   } catch (error: any) {
     // Handle 429 rate limit errors with exponential backoff
     if (error.response?.status === 429) {
@@ -232,7 +234,7 @@ async function rateLimitedRequest<T>(requestFn: () => Promise<T>): Promise<T> {
         await new Promise(r => setTimeout(r, backoff));
         lastRequestTime = 0;
         try {
-          return await requestFn();
+          return await requestFn(baseUrl);
         } catch (retryError: any) {
           if (retryError.response?.status !== 429 || retry === 3) throw retryError;
         }
@@ -242,21 +244,6 @@ async function rateLimitedRequest<T>(requestFn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function createRedisClient(): Promise<Redis> {
-  try {
-    const redis = new Redis(REDIS_URL, { 
-      connectTimeout: 3000,
-      maxRetriesPerRequest: 1 
-    });
-    await redis.ping();
-    console.log('[Redis] Connected to Redis');
-    return redis;
-  } catch (e) {
-      console.log('[Redis] Connection failed, using mock in-memory fallback');
-      const MockRedis = require('../shared/mock_redis').default;
-      return new MockRedis();
-    }
-}
 
 export class AresAgent {
   private redis!: Redis;
@@ -266,9 +253,29 @@ export class AresAgent {
   private rateLimiter!: RateLimiter;
   private config: any;
 
-  constructor() {
-    this.loadConfig();
+  constructor(config?: any, redis?: Redis) {
+    if (config) {
+      this.config = config;
+    } else {
+      this.loadConfig();
+    }
+    if (redis) {
+      this.redis = redis;
+      this.rateLimiter = new RateLimiter(this.redis, this.config);
+    }
     this.jupiter = new SwapApi();
+  }
+
+  private isPaperMode(): boolean {
+    const envVar = process.env.MTUS_ENVIRONMENT;
+    if (envVar) return envVar.toLowerCase() === 'paper';
+    
+    // Fallback to config
+    if (this.config?.system?.environment) {
+      return this.config.system.environment.toLowerCase() === 'paper';
+    }
+    
+    return true; // Default to safe mode
   }
 
   private loadConfig(): void {
@@ -306,9 +313,9 @@ export class AresAgent {
     console.log(`AGT-05: ✅ Keypair verified correct - matches expected wallet`);
   }
 
-  async executeTrade(mint: string, correlationId: string): Promise<void> {
+  async executeTrade(mint: string, correlationId: string, isPump: boolean = false): Promise<void> {
     // Check operational window (21:00 - 06:00 IST) per Section 1.1
-    if (!IS_PAPER_MODE && !isOperationalWindowActive()) {
+    if (!this.isPaperMode() && !isOperationalWindowActive()) {
       console.log(`AGT-05: [OPERATIONAL WINDOW] Trade blocked - outside trading hours (21:00-06:00 IST)`);
       const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: 'Outside operational window' }, correlationId);
       await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
@@ -327,7 +334,7 @@ export class AresAgent {
     }
 
     // Check if we're in paper or production mode
-    if (!IS_PAPER_MODE) {
+    if (!this.isPaperMode()) {
       // PRODUCTION MODE - LIVE TRADING
       console.log(`AGT-05: [LIVE] ========== TRADE START ==========`);
       console.log(`AGT-05: [LIVE] Mint: ${mint}`);
@@ -988,7 +995,8 @@ async run(): Promise<void> {
         // No queue dequeue - Hermes already processed the queue and Anansi approved it
         console.log(`AGT-05: [EVENT] Received trade_approved for ${envelope.payload?.mint?.slice(0, 8) || envelope.payload?.token?.mint?.slice(0, 8)}...`);
         const mint = envelope.payload?.token?.mint || envelope.payload?.mint;
-        await this.executeTrade(mint, envelope.correlation_id);
+        const isPump = envelope.payload?.is_pump || false;
+        await this.executeTrade(mint, envelope.correlation_id, isPump);
       } catch (e: any) {
         console.log(`AGT-05: [ERROR] Error processing event: ${e.message}`);
       }

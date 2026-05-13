@@ -7,8 +7,10 @@ import sys
 import yaml
 from typing import Dict, Optional, Any
 from dotenv import load_dotenv
+from src.python.shared.api_manager import GlobalApiManager, ApiProvider
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
+from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.safe_output import safe_print as print
 from src.python.shared.constants import (
     CHANNEL_SOCIAL_SCORED,
@@ -28,6 +30,13 @@ class CassandraAgent:
         self.pubsub = None
         self.running = False
         self.session = None
+        
+        # Initialize API Manager
+        self.api_manager = GlobalApiManager()
+        self.api_manager.setup_router("social", [
+            ApiProvider("dexscreener", DEXSCREENER_API, capacity=5, refill_rate=1),
+            ApiProvider("metadata", "", capacity=10, refill_rate=2) # Generic for metadata URIs
+        ])
 
     async def connect_redis(self):
         self.redis = await aioredis.from_url(
@@ -39,37 +48,26 @@ class CassandraAgent:
 
     async def fetch_dexscreener_data(self, mint: str) -> Optional[Dict]:
         try:
-            url = f"{DEXSCREENER_API}/{mint}"
-            async with self.session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("pair", {})
-        except Exception as e:
-            print(f"AGT-08: DexScreener fetch failed: {e}")
+            path = f"/{mint}"
+            data = await self.api_manager.request("social", "GET", provider="dexscreener", path=path, timeout=5)
+            if data:
+                return data.get("pair", {})
+        except Exception:
+            pass
         return None
 
     async def fetch_metadata_socials(self, uri: str) -> Dict[str, bool]:
         socials = {"twitter": False, "telegram": False, "website": False}
         try:
-            async with self.session.get(uri, timeout=5) as resp:
-                if resp.status == 200:
-                    metadata = await resp.json()
-                    social = (
-                        metadata.get("social", {}) or metadata.get("Social", {}) or {}
-                    )
-                    socials["twitter"] = bool(
-                        social.get("twitter") or social.get("x") or social.get("X")
-                    )
-                    socials["telegram"] = bool(
-                        social.get("telegram") or social.get("telegram")
-                    )
-                    socials["website"] = bool(
-                        social.get("website")
-                        or social.get("website")
-                        or social.get("url")
-                    )
-        except Exception as e:
-            print(f"AGT-08: Metadata fetch error: {e}")
+            # We use the 'metadata' provider which has no base URL (uri is absolute)
+            data = await self.api_manager.request("social", "GET", provider="metadata", path=uri, timeout=5)
+            if data:
+                social = data.get("social", {}) or data.get("Social", {}) or {}
+                socials["twitter"] = bool(social.get("twitter") or social.get("x") or social.get("X"))
+                socials["telegram"] = bool(social.get("telegram"))
+                socials["website"] = bool(social.get("website") or social.get("url"))
+        except Exception:
+            pass
         return socials
 
     async def score_sentiment(self, token_payload: Dict) -> float:
@@ -180,10 +178,26 @@ class CassandraAgent:
         self.running = True
         await self.connect_redis()
         self.session = aiohttp.ClientSession()
+        is_subscribed = True
         print("AGT-08: Cassandra agent started")
 
         while self.running:
             try:
+                active = is_operational_window_active()
+
+                if active and not is_subscribed:
+                    await self.pubsub.subscribe(CHANNEL_TOKEN_RECEIVED_SOCIAL)
+                    is_subscribed = True
+                    print("AGT-08: [WINDOW OPEN] Resubscribed to social channel")
+                elif not active and is_subscribed:
+                    await self.pubsub.unsubscribe()
+                    is_subscribed = False
+                    print("AGT-08: [OFF-HOURS] Unsubscribed from social channel")
+
+                if not active:
+                    await asyncio.sleep(60)
+                    continue
+
                 message = await self.pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
                     await self.handle_token_received(message["data"])
@@ -205,9 +219,7 @@ class CassandraAgent:
         print("AGT-08: Cassandra agent stopped")
 
 
-if __name__ == "__main__":
-    # Find project root
-
+async def main():
     # Find project root
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -229,6 +241,9 @@ if __name__ == "__main__":
 
     agent = CassandraAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

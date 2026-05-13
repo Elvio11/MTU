@@ -109,7 +109,8 @@ async def test_hermes_run_dequeues_and_routes(hermes):
     hermes.handle_token_detected = fake_handle
     hermes.priority_queue.dequeue = AsyncMock(return_value=(env.model_dump(), 1))
     # Patch connect_redis so run() doesn't try to reach Redis
-    with patch.object(hermes, "connect_redis", new_callable=AsyncMock):
+    with patch.object(hermes, "connect_redis", new_callable=AsyncMock), \
+         patch("src.python.agents.hermes.is_operational_window_active", return_value=True):
         await hermes.run()
     assert call_count == 1
 
@@ -126,7 +127,8 @@ async def test_hermes_run_dequeue_string(hermes):
 
     hermes.handle_token_detected = fake_handle
     hermes.priority_queue.dequeue = AsyncMock(return_value=(env.model_dump_json(), 2))
-    with patch.object(hermes, "connect_redis", new_callable=AsyncMock):
+    with patch.object(hermes, "connect_redis", new_callable=AsyncMock), \
+         patch("src.python.agents.hermes.is_operational_window_active", return_value=True):
         await hermes.run()
     assert call_count == 1
 
@@ -144,6 +146,7 @@ async def test_hermes_run_dequeue_none_then_stop(hermes):
 
     hermes.priority_queue.dequeue = fake_dequeue
     with patch.object(hermes, "connect_redis", new_callable=AsyncMock), \
+         patch("src.python.agents.hermes.is_operational_window_active", return_value=True), \
          patch("asyncio.sleep", new_callable=AsyncMock):
         await hermes.run()
 
@@ -161,6 +164,7 @@ async def test_hermes_run_dequeue_exception(hermes):
 
     hermes.priority_queue.dequeue = fake_dequeue
     with patch.object(hermes, "connect_redis", new_callable=AsyncMock), \
+         patch("src.python.agents.hermes.is_operational_window_active", return_value=True), \
          patch("asyncio.sleep", new_callable=AsyncMock):
         await hermes.run()
 
@@ -258,6 +262,19 @@ async def test_ledger_run_processes_message(ledger):
         if message:
             await ledger.handle_event(message["channel"], message["data"])
     assert call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_hermes_handle_token_detected_valid_uuid(hermes):
+    """Test hermes with valid UUID to ensure it hits the publish lines."""
+    msg = {
+        "agent_id": "AGT-01",
+        "event_type": "token_detected",
+        "payload": {"mint": "M1"},
+        "correlation_id": str(uuid.uuid4())
+    }
+    await hermes.handle_token_detected(json.dumps(msg))
+    assert hermes.redis.publish.called
 
 
 @pytest.mark.asyncio
@@ -523,6 +540,21 @@ async def test_bridge_forward_client_send_fail(bridge):
 
 
 @pytest.mark.asyncio
+async def test_bridge_handler(bridge):
+    """Test the WebSocket handler registration."""
+    mock_ws = AsyncMock()
+    mock_ws.remote_address = ("127.0.0.1", 12345)
+    # Mock wait_closed to return immediately
+    mock_ws.wait_closed = AsyncMock()
+    
+    # We can check that it was added during the process if we mock discard
+    bridge.clients = MagicMock(spec=set)
+    await bridge.handler(mock_ws, "/path")
+    bridge.clients.add.assert_called_with(mock_ws)
+    bridge.clients.discard.assert_called_with(mock_ws)
+
+
+@pytest.mark.asyncio
 async def test_bridge_forward_json_decode_error(bridge):
     msg = {"type": "message", "channel": "ch", "data": "not-valid-json"}
 
@@ -581,48 +613,46 @@ async def test_bridge_stop_no_connections():
     b = DashboardBridge()
     await b.stop()  # Should not raise
 
-import runpy
-
-def test_hermes_main_entry_point():
+@pytest.mark.asyncio
+async def test_hermes_main_entry_point():
+    from src.python.agents.hermes import main
     m = mock_open(read_data="system:\n  environment: paper\n")
     with patch("src.python.agents.hermes.open", m), \
          patch("src.python.agents.hermes.HermesAgent.run", new_callable=AsyncMock), \
-         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
-         patch("asyncio.run"):
-        try:
-            runpy.run_module("src.python.agents.hermes", run_name="__main__")
-        except SystemExit:
-            pass
+         patch("src.python.agents.hermes.validate_config", return_value=(True, None)):
+        await main()
 
-def test_ledger_main_entry_point():
+@pytest.mark.asyncio
+async def test_ledger_main_entry_point():
+    from src.python.agents.ledger import main
     m = mock_open(read_data="system:\n  environment: paper\n")
     with patch("src.python.agents.ledger.open", m), \
          patch("src.python.agents.ledger.LedgerAgent.run", new_callable=AsyncMock), \
-         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
-         patch("asyncio.run"):
-        try:
-            runpy.run_module("src.python.agents.ledger", run_name="__main__")
-        except SystemExit:
-            pass
+         patch("src.python.agents.ledger.validate_config", return_value=(True, None)):
+        await main()
 
-def test_dashboard_bridge_main_entry_point():
+@pytest.mark.asyncio
+async def test_dashboard_bridge_main_entry_point():
+    from src.python.agents.dashboard_bridge import main
     m = mock_open(read_data="system:\n  environment: paper\n")
     with patch("src.python.agents.dashboard_bridge.open", m), \
          patch("src.python.agents.dashboard_bridge.DashboardBridge.run", new_callable=AsyncMock), \
-         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
-         patch("asyncio.run"):
-        try:
-            runpy.run_module("src.python.agents.dashboard_bridge", run_name="__main__")
-        except SystemExit:
-            pass
+         patch("src.python.agents.dashboard_bridge.validate_config", return_value=(True, None)):
+        await main()
 
-def test_telegram_bot_main_entry_point():
+@pytest.mark.asyncio
+async def test_telegram_bot_main_entry_point():
+    from src.python.agents.telegram_bot_agent import main
     m = mock_open(read_data="system:\n  environment: paper\n")
+    
+    mock_bot = AsyncMock()
+    mock_bot.initialize = AsyncMock()
+    mock_bot.start = AsyncMock()
+    mock_bot.stop = AsyncMock()
+    
     with patch("src.python.agents.telegram_bot_agent.open", m), \
-         patch("src.python.agents.telegram_bot_agent.main", new_callable=AsyncMock), \
-         patch("src.python.shared.config_validator.load_schema", return_value=({}, None)), \
-         patch("asyncio.run"):
-        try:
-            runpy.run_module("src.python.agents.telegram_bot_agent", run_name="__main__")
-        except SystemExit:
-            pass
+         patch("src.python.shared.telegram_bot.create_bot", return_value=mock_bot), \
+         patch("src.python.agents.telegram_bot_agent.validate_config", return_value=(True, None)):
+        # Telegram bot main uses asyncio.Event().wait(), so we need to stop it
+        with patch("asyncio.Event.wait", new_callable=AsyncMock) as mock_wait:
+            await main()

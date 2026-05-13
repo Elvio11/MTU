@@ -102,25 +102,25 @@ class NofxAgent:
                     print(f"AGT-01: Pump4Dev also failed: {p4d_err}")
                     return False
 
-        if "whistle" in ws_url:
-            sub_msg = json.dumps({"type": "subscribe", "channel": "pumpfun:new"})
-            print(f"AGT-01: Sending (Whistle): {sub_msg}")
-            await self.ws.send(sub_msg)
-            print("AGT-01: Subscribed to Whistle pumpfun:new channel")
-            return True
+        # if "whistle" in ws_url:
+        #     sub_msg = json.dumps({"type": "subscribe", "channel": "pumpfun:new"})
+        #     print(f"AGT-01: Sending (Whistle): {sub_msg}")
+        #     await self.ws.send(sub_msg)
+        #     print("AGT-01: Subscribed to Whistle pumpfun:new channel")
+        #     return True
 
-        sub_msg = json.dumps({"method": "subscribeNewToken"})
-        print(f"AGT-01: Sending: {sub_msg}")
-        await self.ws.send(sub_msg)
+        # sub_msg = json.dumps({"method": "subscribeNewToken"})
+        # print(f"AGT-01: Sending: {sub_msg}")
+        # await self.ws.send(sub_msg)
 
-        trade_msg = json.dumps(
-            {
-                "method": "subscribeTokenTrade",
-                "keys": [],
-            }
-        )
-        print(f"AGT-01: Sending: {trade_msg}")
-        await self.ws.send(trade_msg)
+        # trade_msg = json.dumps(
+        #     {
+        #         "method": "subscribeTokenTrade",
+        #         "keys": [],
+        #     }
+        # )
+        # print(f"AGT-01: Sending: {trade_msg}")
+        # await self.ws.send(trade_msg)
 
         wallet_msg = json.dumps({"method": "subscribeAccountTrade", "keys": []})
         print(f"AGT-01: Sending: {wallet_msg}")
@@ -134,18 +134,6 @@ class NofxAgent:
             pass
 
         print("AGT-01: Subscribed to: NewToken, TokenTrade, AccountTrade, Migration")
-        print(f"AGT-01: Sending: {trade_msg}")
-        await self.ws.send(trade_msg)
-
-        wallet_msg = json.dumps({"method": "subscribeAccountTrade", "keys": []})
-        print(f"AGT-01: Sending: {wallet_msg}")
-        await self.ws.send(wallet_msg)
-
-        print("AGT-01: Subscribed to: NewToken, TokenTrade, AccountTrade")
-        print(f"AGT-01: Sending: {trade_msg}")
-        await self.ws.send(trade_msg)
-
-        print("AGT-01: Subscribed to: NewToken, TokenTrade")
         return True
 
     async def poll_for_tokens_http(self):
@@ -170,19 +158,19 @@ class NofxAgent:
                                 "mint": mint,
                                 "name": token_info.get("name", "Unknown"),
                                 "symbol": token_info.get("symbol", "???"),
-                                "uri": "",
+                                "uri": token_info.get("uri") or None,
                                 "initialBuy": 0.0,
                                 "marketCapSol": float(pair.get("marketCap", 0)) / 1e9
                                 if pair.get("marketCap")
                                 else 0,
-                                "bondingCurveKey": pair.get("pool", ""),
+                                "bondingCurveKey": pair.get("pool") or "11111111111111111111111111111111",
                                 "vSolInBondingCurve": float(
                                     pair.get("liquidity", {}).get("sol", 0)
                                 )
                                 * 1e9
                                 if pair.get("liquidity", {}).get("sol")
                                 else 0,
-                                "traderPublicKey": token_info.get("creator", ""),
+                                "traderPublicKey": token_info.get("creator") or "11111111111111111111111111111111",
                             }
                             await self._handle_new_token(payload)
 
@@ -605,9 +593,7 @@ class NofxAgent:
             print("AGT-01: Redis connection closed")
 
 
-if __name__ == "__main__":
-    # Find project root
-
+async def main():
     # Find project root
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -629,6 +615,9 @@ if __name__ == "__main__":
 
     agent = NofxAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

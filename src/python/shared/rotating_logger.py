@@ -68,8 +68,10 @@ class RotatingLogger:
             **kwargs,
         }
 
-        log_file = self._get_log_file()
-        log_file.write_text(json.dumps(log_entry) + "\n", encoding="utf-8")
+        self._get_log_file() # Ensure handle is ready
+        if self.current_handle:
+            self.current_handle.write(json.dumps(log_entry) + "\n")
+            self.current_handle.flush()
 
         # Also print to console for CRITICAL/ERROR
         if level in ("ERROR", "CRITICAL"):

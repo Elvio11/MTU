@@ -6,6 +6,7 @@ import sqlite3
 import os
 import sys
 import yaml
+from datetime import datetime, timedelta
 from typing import Dict
 from dotenv import load_dotenv
 
@@ -30,6 +31,7 @@ from src.python.shared.constants import (
     CHANNEL_TIME_SL_HIT,
     CHANNEL_PRICE_UNAVAILABLE,
 )
+from src.python.shared.operational_window import is_operational_window_active
 
 
 from src.python.shared.config_validator import validate_config
@@ -111,15 +113,70 @@ class LedgerAgent:
         except Exception as e:
             print(f"AGT-09: Error handling event: {e}")
 
+    def rotate_audit_logs(self):
+        """Delete audit logs and JSON entries older than 30 days per Section 5.1"""
+        try:
+            cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+            cursor = self.db.execute("DELETE FROM audit_ledger WHERE timestamp_utc < ?", (cutoff,))
+            deleted = cursor.rowcount
+            self.db.commit()
+            if deleted > 0:
+                print(f"AGT-09: [ROTATION] Deleted {deleted} old audit log entries")
+            
+            # Stale position cleanup (pos_2, pos_3)
+            cursor = self.db.execute("DELETE FROM positions WHERE position_id IN ('pos_2', 'pos_3')")
+            deleted_stale = cursor.rowcount
+            self.db.commit()
+            if deleted_stale > 0:
+                print(f"AGT-09: [CLEANUP] Deleted {deleted_stale} stale position entries")
+                
+        except Exception as e:
+            print(f"AGT-09: Error during rotation/cleanup: {e}")
+
     async def run(self):
         self.running = True
         self.connect_db()
-        self.audit_file = open("data/audit_ledger.json", "a", encoding="utf-8")
         await self.connect_redis()
+        self.audit_file = open("data/audit_ledger.json", "a", encoding="utf-8")
+        is_subscribed = True
         print("AGT-09: Ledger agent started")
+        last_rotation = 0
 
         while self.running:
             try:
+                now_ts = time.time()
+                if now_ts - last_rotation > 86400: # Every 24h
+                    self.rotate_audit_logs()
+                    last_rotation = now_ts
+                active = is_operational_window_active()
+                
+                if active and not is_subscribed:
+                    await self.pubsub.subscribe(*[
+                        CHANNEL_TOKEN_DETECTED,
+                        CHANNEL_TOKEN_QUALIFIED,
+                        CHANNEL_TRADE_APPROVED,
+                        CHANNEL_TRADE_EXECUTED,
+                        CHANNEL_TRADE_FAILED,
+                        CHANNEL_POSITION_OPENED,
+                        CHANNEL_POSITION_CLOSED,
+                        CHANNEL_TP1_HIT,
+                        CHANNEL_TP2_HIT,
+                        CHANNEL_STOP_LOSS_HIT,
+                        CHANNEL_TRAILING_STOP_HIT,
+                        CHANNEL_TIME_SL_HIT,
+                        CHANNEL_PRICE_UNAVAILABLE,
+                    ])
+                    is_subscribed = True
+                    print("AGT-09: [WINDOW OPEN] Resubscribed to event channels")
+                elif not active and is_subscribed:
+                    await self.pubsub.unsubscribe()
+                    is_subscribed = False
+                    print("AGT-09: [OFF-HOURS] Unsubscribed from channels to save resources")
+
+                if not active:
+                    await asyncio.sleep(60)
+                    continue
+
                 message = await self.pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=1.0
                 )
@@ -141,7 +198,7 @@ class LedgerAgent:
         print("AGT-09: Ledger agent stopped")
 
 
-if __name__ == "__main__":
+async def main():
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
@@ -158,10 +215,12 @@ if __name__ == "__main__":
     if not is_valid:
         print(f"[CONFIG] Configuration validation failed: {error}")
         sys.exit(1)
-        # exit(1) # We can still run with defaults or warn
 
     agent = LedgerAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

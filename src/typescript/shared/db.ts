@@ -5,8 +5,9 @@ let db: any = null;
 let SQL: any = null;
 let dbPath: string | null = null;
 let saveInterval: NodeJS.Timeout | null = null;
+let dailyExportInterval: NodeJS.Timeout | null = null;
 
-async function initDB(): Promise<boolean> {
+export async function initDB(): Promise<boolean> {
   try {
     const initSqlJs = require('sql.js');
     SQL = await initSqlJs();
@@ -62,6 +63,7 @@ async function initDB(): Promise<boolean> {
     `);
     
     console.log('[DB] SQLite (sql.js) initialized successfully');
+    dbReady = true;
     
     const dataDir = path.dirname(dbPath);
     if (!fs.existsSync(dataDir)) {
@@ -89,12 +91,15 @@ async function initDB(): Promise<boolean> {
 
 let dbReady = false;
 
-initDB().then(() => {
-  dbReady = true;
-  console.log('[DB] Database ready');
-}).catch(e => {
-  console.log('[DB] Init failed:', e.message);
-});
+// Auto-init only if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  initDB().then(() => {
+    dbReady = true;
+    console.log('[DB] Database ready');
+  }).catch(e => {
+    console.log('[DB] Init failed:', e.message);
+  });
+}
 
 function saveDB(): boolean {
   if (!db || !dbPath) {
@@ -262,9 +267,23 @@ export function exportAuditLogToJSON(outputPath?: string): string | null {
   }
 }
 
-setInterval(() => {
-  const dataDir = path.join(__dirname, '../../data');
-  if (!fs.existsSync(dataDir)) return;
-  const exportPath = path.join(dataDir, 'audit_daily.json');
-  exportAuditLogToJSON(exportPath);
-}, 24 * 60 * 60 * 1000);
+export function shutdownDB(): void {
+  if (saveInterval) {
+    clearInterval(saveInterval);
+    saveInterval = null;
+  }
+  if (dailyExportInterval) {
+    clearInterval(dailyExportInterval);
+    dailyExportInterval = null;
+  }
+  console.log('[DB] Database shutdown complete');
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  dailyExportInterval = setInterval(() => {
+    const dataDir = path.join(__dirname, '../../data');
+    if (!fs.existsSync(dataDir)) return;
+    const exportPath = path.join(dataDir, 'audit_daily.json');
+    exportAuditLogToJSON(exportPath);
+  }, 24 * 60 * 60 * 1000);
+}

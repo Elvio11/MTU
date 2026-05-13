@@ -5,7 +5,7 @@
 
 const { SentinelAgent } = require('./sentinel');
 
-async function sentinelMain() {
+export async function sentinelMain() {
   console.log('='.repeat(50));
   console.log('Sentinel Agent (AGT-06) - Position Monitor');
   console.log('='.repeat(50));
@@ -13,6 +13,7 @@ async function sentinelMain() {
   const agent = new SentinelAgent();
   
   try {
+    await agent.init();
     console.log('[OK] Agent initialized');
     
     // Load wallet - passphrase from stdin for security
@@ -53,4 +54,6 @@ async function sentinelMain() {
   }
 }
 
-sentinelMain();
+if (require.main === module) {
+  sentinelMain();
+}

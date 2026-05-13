@@ -94,8 +94,8 @@ class RPCHelper:
             endpoint.state_change_time = time.time()
             print(f"Circuit: {name} opened after {endpoint.failures} failures")
 
-    def _get_weighted_endpoints(self) -> List[RPCEndpoint]:
-        """Get endpoints in round-robin order based on weights"""
+    async def _get_weighted_endpoints(self) -> List[RPCEndpoint]:
+        """Get unique endpoints sorted by last success and weight"""
         await self._check_circuit_state()
 
         available = [
@@ -112,19 +112,20 @@ class RPCHelper:
                 return half_open
             return list(self.endpoints.values())
 
-        weighted = []
-        for ep in available:
-            weighted.extend([ep] * ep.weight)
+        # Sort by last_success (ascending) and weight (descending)
+        # Endpoints with older last_success or higher weight come first
+        sorted_endpoints = sorted(
+            available,
+            key=lambda x: (x.last_success, -x.weight)
+        )
 
-        weighted.sort(key=lambda x: x.last_success)
-
-        return weighted
+        return sorted_endpoints
 
     async def make_request(
         self, method: str, payload: Dict[str, Any], timeout: int = 30
     ) -> Optional[Dict]:
         """Make RPC request with round-robin and circuit breaker"""
-        endpoints = self._get_weighted_endpoints()
+        endpoints = await self._get_weighted_endpoints()
 
         for endpoint in endpoints:
             try:

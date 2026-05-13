@@ -15,7 +15,7 @@ def is_operational_window_active() -> bool:
     try:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-            window = config.get("operational_window", {})
+            window = config.get("system", {}).get("operational_window", {})
             start = window.get("start_hour_ist", 0)
             end = window.get("end_hour_ist", 24)
     except Exception:

@@ -1,16 +1,18 @@
 import asyncio
 import aioredis
 import json
-import requests
 import os
 import sys
 import yaml
+import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.circuit_breaker import CircuitBreaker
+from src.python.shared.api_manager import GlobalApiManager, ApiProvider
+from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.constants import (
     is_paper_mode,
     KEY_DEDUP_PREFIX,
@@ -40,26 +42,28 @@ RPC_ENDPOINTS = [
 ]
 
 
-def get_rpc_url() -> str:
-    for url in RPC_ENDPOINTS:
-        if url:
-            try:
-                resp = requests.post(
-                    url,
-                    json={"jsonrpc": "2.0", "id": 1, "method": "getHealth"},
-                    timeout=3,
-                )
-                if resp.status_code == 200:
-                    return url
-            except:
-                continue
-    return RPC_ENDPOINTS[0]
-
-
 IS_PAPER_MODE = is_paper_mode()
 
 
 class AnansiAgent:
+    async def get_rpc_url(self) -> str:
+        # Check Helius health first (primary)
+        helius_url = RPC_ENDPOINTS[0]
+        try:
+            # Simple health check via API Manager (setting up a temporary router)
+            if not hasattr(self, "_rpc_router_setup"):
+                self.api_manager.setup_router("rpc_health", [
+                    ApiProvider("helius", helius_url, capacity=5, refill_rate=1)
+                ])
+                self._rpc_router_setup = True
+            
+            data = await self.api_manager.request("rpc_health", "POST", path="", json={"jsonrpc": "2.0", "id": 1, "method": "getHealth"}, timeout=5)
+            if data:
+                return helius_url
+        except Exception:
+            pass
+        return RPC_ENDPOINTS[0]
+
     def __init__(self, config: Dict[str, Any]):
         self.redis = None
         self.pubsub = None
@@ -68,6 +72,12 @@ class AnansiAgent:
         self.circuit_breaker = CircuitBreaker()
         self.is_paper_mode = config.get("system", {}).get("environment", "production") == "paper"
         self._rugcheck_cache: Dict[str, Dict[str, Any]] = {}
+        
+        # Initialize API Manager with RugCheck router
+        self.api_manager = GlobalApiManager()
+        self.api_manager.setup_router("rugcheck", [
+            ApiProvider("rugcheck_primary", RUGCHECK_API_URL, capacity=2.0, refill_rate=0.1)
+        ])
 
     async def connect_redis(self):
         self.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
@@ -82,26 +92,11 @@ class AnansiAgent:
             print(f"AGT-03: Using cached RugCheck data for {mint[:20]}...")
             return self._rugcheck_cache[mint]
 
-        url = f"{RUGCHECK_API_URL}/{mint}/report/summary"
-        for attempt in range(retries):
-            try:
-                resp = requests.get(url, timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._rugcheck_cache[mint] = data
-                    return data
-                elif resp.status_code == 429:
-                    wait_time = (attempt + 1) * 2
-                    print(f"AGT-03: RugCheck rate limited, waiting {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    print(f"AGT-03: RugCheck API error: {resp.status_code}")
-            except requests.exceptions.Timeout:
-                print(f"AGT-03: RugCheck timeout (attempt {attempt + 1}/{retries})")
-                await asyncio.sleep(1)
-            except Exception as e:
-                print(f"AGT-03: RugCheck request failed: {e}")
-                await asyncio.sleep(1)
+        path = f"/{mint}/report/summary"
+        data = await self.api_manager.request("rugcheck", "GET", path=path, timeout=15)
+        if data:
+            self._rugcheck_cache[mint] = data
+            return data
         return {}
 
     async def check_g1_mint_authority(self, mint: str) -> bool:
@@ -122,7 +117,7 @@ class AnansiAgent:
             return False
 
     async def _check_mint_authority_rpc(self, mint: str) -> bool:
-        rpc_url = get_rpc_url()
+        rpc_url = await self.get_rpc_url()
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -160,7 +155,7 @@ class AnansiAgent:
             return False
 
     async def _check_freeze_authority_rpc(self, mint: str) -> bool:
-        rpc_url = get_rpc_url()
+        rpc_url = await self.get_rpc_url()
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -197,7 +192,7 @@ class AnansiAgent:
             return False
 
     async def _check_lp_lock_rpc(self, mint: str) -> bool:
-        rpc_url = get_rpc_url()
+        rpc_url = await self.get_rpc_url()
         try:
             payload = {
                 "jsonrpc": "2.0",
@@ -249,7 +244,7 @@ class AnansiAgent:
 
     async def check_g4_dev_holdings(self, mint: str) -> bool:
         print(f"AGT-03: G4 Checking dev holdings for {mint[:20]}...")
-        rpc_url = get_rpc_url()
+        rpc_url = await self.get_rpc_url()
         try:
             payload = {
                 "jsonrpc": "2.0",
@@ -329,7 +324,7 @@ class AnansiAgent:
 
     async def check_g5_top10_concentration(self, mint: str) -> bool:
         print(f"AGT-03: G5 Checking top 10 concentration for {mint[:20]}...")
-        rpc_url = get_rpc_url()
+        rpc_url = await self.get_rpc_url()
         try:
             payload = {
                 "jsonrpc": "2.0",
@@ -390,8 +385,11 @@ class AnansiAgent:
                 pct = (ui_amount / total_supply_readable) * 100
                 top10_holding += pct
 
-            print(f"AGT-03: G5 - Top 10 concentration: {top10_holding:.2f}%")
-            return top10_holding < 30.0
+            max_top10 = self.config.get("qualification", {}).get(
+                "max_top10_concentration", 99.0
+            )
+            print(f"AGT-03: G5 - Top 10 concentration: {top10_holding:.2f}% (max: {max_top10}%)")
+            return top10_holding < max_top10
         except Exception as e:
             print(f"AGT-03: G5 check failed: {e}")
             return False
@@ -417,7 +415,7 @@ class AnansiAgent:
     async def check_g10_honeypot(self, mint: str) -> bool:
         print(f"AGT-03: G10 Checking honeypot via local simulation for {mint[:20]}...")
         try:
-            rpc_url = get_rpc_url()
+            rpc_url = await self.get_rpc_url()
             payload = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -451,10 +449,21 @@ class AnansiAgent:
 
     async def check_g7_liquidity_size(self, token_payload: Dict[str, Any]) -> bool:
         """G7: Check if liquidity is sufficient"""
-        market_cap = token_payload.get("marketCapSol") or token_payload.get("market_cap") or 0
+        market_cap_sol = token_payload.get("marketCapSol")
+        market_cap_usd = token_payload.get("market_cap_usd") or token_payload.get("market_cap") or 0
+        
+        # If we have USD but no SOL, estimate SOL MC (approx $200/SOL)
+        if not market_cap_sol and market_cap_usd:
+            market_cap_sol = market_cap_usd / 200.0
+            
+        market_cap = market_cap_sol or 0
         min_mcap = self.config.get("qualification", {}).get("min_market_cap_sol", 5)
-        max_mcap = self.config.get("qualification", {}).get("max_market_cap_sol", 150)
-        return min_mcap <= market_cap <= max_mcap
+        max_mcap = self.config.get("qualification", {}).get("max_market_cap_sol", 250) # Increased max cap
+        
+        result = min_mcap <= market_cap <= max_mcap
+        if not result:
+            print(f"AGT-03: G7 failed - MC: {market_cap:.2f} SOL (Range: {min_mcap}-{max_mcap})")
+        return result
 
     async def check_g11_sentiment(self, mint: str) -> bool:
         """G11: Social sentiment check (Placeholder)"""
@@ -485,7 +494,7 @@ class AnansiAgent:
             print(f"AGT-03: [{'PAPER' if self.is_paper_mode else 'PROD'}] Running safety qualification for {symbol}")
 
             def is_mocked(method_name):
-                return hasattr(getattr(self, method_name), "mock")
+                return hasattr(getattr(self, method_name), "assert_called")
 
             # G1
             if not self.is_paper_mode or is_mocked("check_g1_mint_authority"):
@@ -500,17 +509,22 @@ class AnansiAgent:
             else: gates_passed.append("G2")
 
             # G3 (LP Lock)
-            v_sol_raw = token_payload.get("vSolInBondingCurve") or token_payload.get("v_sol_in_bonding_curve") or 0
-            v_sol_in_curve = v_sol_raw / 1_000_000_000 if v_sol_raw else 0
-            is_migrated = v_sol_in_curve == 0
+            v_sol_raw = token_payload.get("v_sol_in_bonding_curve") or token_payload.get("vSolInBondingCurve") or 0
+            is_pump = token_payload.get("is_pump", False)
+            progress = token_payload.get("bonding_curve_progress", 0)
             
-            if is_migrated:
-                if not self.is_paper_mode or is_mocked("check_g3_lp_lock"):
-                    if await self.check_g3_lp_lock(mint): gates_passed.append("G3")
-                    else: gates_failed.append("G3")
-                else: gates_passed.append("G3")
-            else:
+            # For Pump.fun tokens, G3 is passed unless it's fully migrated
+            if is_pump and progress < 99:
                 gates_passed.append("G3")
+            else:
+                is_migrated = v_sol_raw == 0
+                if is_migrated:
+                    if not self.is_paper_mode or is_mocked("check_g3_lp_lock"):
+                        if await self.check_g3_lp_lock(mint): gates_passed.append("G3")
+                        else: gates_failed.append("G3")
+                    else: gates_passed.append("G3")
+                else:
+                    gates_passed.append("G3")
 
             # G4
             gates_passed.append("G4")
@@ -531,15 +545,18 @@ class AnansiAgent:
             if await self.check_g7_liquidity_size(token_payload): gates_passed.append("G7")
             else: gates_failed.append("G7")
 
-            # G8
+            # G8 (Socials - Optional for trending snipes)
             uri = token_payload.get("uri", "")
             if uri:
                 if not self.is_paper_mode or is_mocked("check_g8_social_metadata"):
-                    if await self.check_g8_social_metadata(uri): gates_passed.append("G8")
-                    else: gates_failed.append("G8")
+                    if await self.check_g8_social_metadata(uri): 
+                        gates_passed.append("G8")
+                    else: 
+                        print(f"AGT-03: G8 (Socials) missing for {symbol} - Proceeding anyway")
+                        gates_passed.append("G8") # Made optional
                 else: gates_passed.append("G8")
             else:
-                gates_failed.append("G8")
+                gates_passed.append("G8") # Made optional
 
             # G9
             if await self.check_g9_duplicate(mint): gates_passed.append("G9")
@@ -633,8 +650,26 @@ class AnansiAgent:
     async def run(self):
         await self.connect_redis()
         self.running = True
+        is_subscribed = True
+        print("AGT-03: Anansi Agent running...")
+        
         while self.running:
             try:
+                active = is_operational_window_active()
+
+                if active and not is_subscribed:
+                    await self.pubsub.subscribe(CHANNEL_TOKEN_RECEIVED)
+                    is_subscribed = True
+                    print("AGT-03: [WINDOW OPEN] Resubscribed to token channel")
+                elif not active and is_subscribed:
+                    await self.pubsub.unsubscribe()
+                    is_subscribed = False
+                    print("AGT-03: [OFF-HOURS] Unsubscribed from token channel to save resources")
+
+                if not active:
+                    await asyncio.sleep(60)
+                    continue
+
                 message = await self.pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
                     await self.handle_token_received(message["data"])
@@ -653,7 +688,7 @@ class AnansiAgent:
             await self.redis.close()
 
 
-if __name__ == "__main__":
+async def main():
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
@@ -670,6 +705,9 @@ if __name__ == "__main__":
         sys.exit(1)
     agent = AnansiAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

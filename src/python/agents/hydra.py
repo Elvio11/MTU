@@ -1,13 +1,13 @@
 import asyncio
 import aioredis
 import json
-import requests
 import os
 import sys
 import yaml
 import time
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
+from src.python.shared.api_manager import GlobalApiManager, ApiProvider
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
@@ -16,12 +16,13 @@ from src.python.shared.constants import (
     EVENT_TOKEN_RECEIVED,
 )
 from src.python.shared.bonding_curve import decode_bonding_curve, calculate_progress
+from src.python.shared.operational_window import is_operational_window_active
 
 load_dotenv("./.env")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SOLANA_RPC_URL = os.getenv("HELIUS_RPC_URL", "")
-PUMPFUN_API_URL = "https://frontend-api.pump.fun/coins"
+PUMPFUN_API_URL = "https://frontend-api-v3.pump.fun/coins"
 DEXSCREENER_API_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
 
 class HydraAgent:
@@ -38,6 +39,17 @@ class HydraAgent:
         self.polling_interval = config.get("hydra", {}).get("polling_interval_seconds", 30)
         self.min_progress = config.get("hydra", {}).get("min_bonding_curve_progress", 35.0)
 
+        # Initialize API Manager
+        self.api_manager = GlobalApiManager()
+        self.api_manager.setup_router("discovery", [
+            ApiProvider("pumpfun", PUMPFUN_API_URL, weight=100, capacity=20, refill_rate=2, headers={
+                "Origin": "https://pump.fun",
+                "Referer": "https://pump.fun/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            })
+        ])
+
     async def connect_redis(self):
         self.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
         print("AGT-12: Connected to Redis")
@@ -45,17 +57,16 @@ class HydraAgent:
     async def fetch_trending_pumpfun(self) -> List[Dict[str, Any]]:
         """Fetch trending tokens from Pump.fun frontend API"""
         try:
-            # Sort by market cap or last reply to find trending
             params = {
                 "offset": 0,
                 "limit": 50,
-                "sort": "market_cap",
+                "sort": "last_reply", # Alternative sorting
                 "order": "DESC",
                 "includeNsfw": "false"
             }
-            resp = requests.get(PUMPFUN_API_URL, params=params, timeout=10)
-            if resp.status_code == 200:
-                return resp.json()
+            data = await self.api_manager.request("discovery", "GET", provider="pumpfun", params=params, timeout=10)
+            if data and isinstance(data, list):
+                return data
             return []
         except Exception as e:
             print(f"AGT-12: Error fetching trending from Pump.fun: {e}")
@@ -82,15 +93,17 @@ class HydraAgent:
         if not mint or mint in self._processed_mints:
             return
 
-        # Calculate progress from API data if available, otherwise fallback to RPC
-        progress = token_data.get("raydium_pool") # Some APIs flag migration status
+        # Calculate progress from virtual_sol_reserves
+        reserves = token_data.get("virtual_sol_reserves", 30000000000)
+        current_progress = ((reserves - 30000000000) / 55000000000) * 100
         
-        # Pump.fun API usually provides 'usd_market_cap' and 'progress'
-        # Progress is often calculated on their frontend.
-        current_progress = token_data.get("progress", 0)
+        # We ONLY want tokens still on the bonding curve (below 100%)
+        # And within the user's specific 15-65% target window
+        min_p = self.min_progress
+        max_p = self.config.get("qualification", {}).get("max_bonding_curve_progress", 65.0)
         
-        if current_progress >= self.min_progress:
-            print(f"AGT-12: Trending token identified: {mint[:10]}... Progress: {current_progress:.2f}%")
+        if min_p <= current_progress <= max_p:
+            print(f"AGT-12: Trending token identified: {token_data.get('symbol', '???')} ({mint[:8]}) Progress: {current_progress:.2f}%")
             
             # Construct discovery envelope
             envelope = AgentMessageEnvelope(
@@ -102,6 +115,9 @@ class HydraAgent:
                     "name": token_data.get("name", "Unknown Token"),
                     "bonding_curve_progress": current_progress,
                     "market_cap": token_data.get("usd_market_cap", 0),
+                    "market_cap_usd": token_data.get("usd_market_cap", 0),
+                    "v_sol_in_bonding_curve": reserves / 1_000_000_000,
+                    "is_pump": True,
                     "is_trending": True,
                     "timestamp": time.time()
                 }
@@ -121,11 +137,23 @@ class HydraAgent:
         
         while self.running:
             try:
+                # Check operational window
+                if not is_operational_window_active():
+                    print("AGT-12: [OFF-HOURS] Outside operational window. Sleeping for 60s...")
+                    await asyncio.sleep(60)
+                    continue
+
                 # 1. Fetch Trending from Pump.fun
                 trending = await self.fetch_trending_pumpfun()
+                # print(f"AGT-12: Polled {len(trending)} trending tokens") # Optional: very verbose
+                
                 for token in trending:
                     await self.process_token(token)
                 
+                if len(trending) > 0:
+                    # Heartbeat log every successful fetch
+                    print(f"AGT-12: Poller heartbeat - {len(trending)} tokens scanned from trending.") 
+
                 await asyncio.sleep(self.polling_interval)
             except asyncio.CancelledError:
                 break
@@ -138,7 +166,7 @@ class HydraAgent:
         if self.redis:
             await self.redis.close()
 
-if __name__ == "__main__":
+async def main():
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
@@ -158,6 +186,9 @@ if __name__ == "__main__":
     
     agent = HydraAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

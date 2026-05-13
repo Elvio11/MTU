@@ -176,29 +176,29 @@ class SolanaSimulator:
             return base64.b64encode(b"fallback_transaction").decode("utf-8")
 
 
-async def execute_swap(
-    self, quote: Dict, user_pubkey: str, sign_func, rpc_url: str
-) -> Dict[str, Any]:
-    """
-    Execute a complete swap: build + sign + send
-    Args:
-        quote: Jupiter quote response
-        user_pubkey: User's wallet address
-        sign_func: Async function to sign and send (provided by caller)
-        rpc_url: RPC endpoint URL
-    Returns: {"success": bool, "tx_sig": str, "error": str}
-    """
-    try:
-        swap_tx = await self.build_transaction(quote, user_pubkey)
+    async def execute_swap(
+        self, quote: Dict, user_pubkey: str, sign_func, rpc_url: str
+    ) -> Dict[str, Any]:
+        """
+        Execute a complete swap: build + sign + send
+        Args:
+            quote: Jupiter quote response
+            user_pubkey: User's wallet address
+            sign_func: Async function to sign and send (provided by caller)
+            rpc_url: RPC endpoint URL
+        Returns: {"success": bool, "tx_sig": str, "error": str}
+        """
+        try:
+            swap_tx = await self.build_transaction(quote, user_pubkey)
 
-        if sign_func:
-            result = await sign_func(swap_tx)
-            return result
-        else:
-            return {
-                "success": False,
-                "error": "No sign function provided - transaction built but not signed",
-            }
+            if sign_func:
+                result = await sign_func(swap_tx)
+                return result
+            else:
+                return {
+                    "success": False,
+                    "error": "No sign function provided - transaction built but not signed",
+                }
 
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

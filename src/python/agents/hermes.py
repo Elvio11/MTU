@@ -13,6 +13,7 @@ load_dotenv("./.env")
 
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.priority_queue import PriorityQueue
+from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.constants import (
     CHANNEL_TOKEN_RECEIVED,
     CHANNEL_TOKEN_RECEIVED_SOCIAL,
@@ -130,6 +131,10 @@ class HermesAgent:
 
         while self.running:
             try:
+                if not is_operational_window_active():
+                    await asyncio.sleep(60)
+                    continue
+
                 result = await self.priority_queue.dequeue()
 
                 if result:
@@ -156,7 +161,7 @@ class HermesAgent:
             await self.redis.close()
 
 
-if __name__ == "__main__":
+async def main():
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
@@ -176,6 +181,9 @@ if __name__ == "__main__":
 
     agent = HermesAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

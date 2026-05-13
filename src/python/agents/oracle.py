@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 # Load .env file
 load_dotenv("./.env")
 
+from src.python.shared.api_manager import GlobalApiManager, ApiProvider
+from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
@@ -45,6 +47,15 @@ class OracleAgent:
         self.birdeye_key = None
         self._sol_price_cache = None
         self._sol_price_time = 0
+        
+        # Initialize API Manager with Market Data router
+        self.api_manager = GlobalApiManager()
+        self.api_manager.setup_router("market_data", [
+            ApiProvider("jupiter", JUPITER_V3_URL, weight=50, capacity=10, refill_rate=5),
+            ApiProvider("dexscreener", DEXSCREENER_URL, weight=30, capacity=5, refill_rate=1),
+            ApiProvider("birdeye", "https://api.birdeye.so/api/v3/token/price", key=BIRDEYE_API_KEY, weight=15, capacity=3, refill_rate=0.5),
+            ApiProvider("coingecko", COINGECKO_API, weight=5, capacity=2, refill_rate=0.2)
+        ])
 
     async def connect_redis(self):
         self.redis = await aioredis.from_url(
@@ -59,86 +70,54 @@ class OracleAgent:
         print("[AGT-04] Jupiter V3 + DexScreener price sources ready")
 
     async def fetch_price_jupiter(self, mint: str) -> float:
-        """Primary: Jupiter V3 API - returns USD price directly"""
+        """Primary: Jupiter V3 API"""
         try:
-            async with self.session.get(
-                f"{JUPITER_V3_URL}?ids={mint}",
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # New V3 format: data[mint]["usdPrice"]
-                    token_data = data.get(mint, {})
-                    price = token_data.get("usdPrice")
-                    if price:
-                        return float(price)
-        except Exception as e:
-            print(f"[AGT-04] Jupiter V3 failed for {mint}: {e}")
+            data = await self.api_manager.request("market_data", "GET", provider="jupiter", params={"ids": mint}, timeout=5)
+            if data:
+                token_data = data.get(mint, {})
+                price = token_data.get("usdPrice")
+                if price:
+                    return float(price)
+        except Exception:
+            pass
         return 0.0
 
     async def fetch_price_dexscreener(self, mint: str) -> float:
         """Secondary: DexScreener API"""
         try:
-            async with self.session.get(
-                f"{DEXSCREENER_URL}/{mint}",
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    pairs = data.get("pairs", [])
-                    if pairs and len(pairs) > 0:
-                        price = pairs[0].get("priceUsd")
-                        if price:
-                            return float(price)
-        except Exception as e:
-            print(f"[AGT-04] DexScreener failed for {mint}: {e}")
+            path = f"/{mint}"
+            data = await self.api_manager.request("market_data", "GET", provider="dexscreener", path=path, timeout=5)
+            if data:
+                pairs = data.get("pairs", [])
+                if pairs:
+                    price = pairs[0].get("priceUsd")
+                    if price:
+                        return float(price)
+        except Exception:
+            pass
         return 0.0
 
     async def fetch_price_birdeye(self, mint: str) -> float:
-        """Tertiary: Birdeye - try alternative endpoint"""
-        if not self.birdeye_key:
-            return 0.0
-
-        # Try the newer v3 API endpoint
+        """Tertiary: Birdeye"""
         try:
-            url = f"https://api.birdeye.so/api/v3/token/price?address={mint}"
-            headers = {"X-API-KEY": self.birdeye_key}
-            async with self.session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return float(data.get("data", {}).get("value", 0.0))
-        except Exception as e:
+            data = await self.api_manager.request("market_data", "GET", provider="birdeye", params={"address": mint}, timeout=5)
+            if data and data.get("success"):
+                return float(data.get("data", {}).get("value", 0.0))
+        except Exception:
             pass
-
-        # Fallback to older endpoint
-        try:
-            url = f"https://public-api.birdeye.so/public/price?address={mint}"
-            headers = {"X-API-KEY": self.birdeye_key}
-            async with self.session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return float(data.get("data", {}).get("value", 0.0))
-        except Exception as e:
-            print(f"[AGT-04] Birdeye failed for {mint}: {e}")
         return 0.0
 
     async def fetch_price_coingecko(self, mint: str) -> float:
         """Last resort: CoinGecko"""
         try:
-            async with self.session.get(
-                f"{COINGECKO_API}/simple/price?ids={SOL_TOKEN_ID}&vs_currencies=usd",
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    usd_price = data.get(SOL_TOKEN_ID, {}).get("usd", 0)
-                    if usd_price > 0 and self._sol_price_cache:
-                        token_usd = self._sol_price_cache / usd_price
-                        return token_usd
+            # We use SOL as a proxy if the specific mint isn't tracked on CoinGecko Free API
+            data = await self.api_manager.request("market_data", "GET", provider="coingecko", path="/simple/price", params={"ids": SOL_TOKEN_ID, "vs_currencies": "usd"}, timeout=10)
+            if data:
+                usd_price = data.get(SOL_TOKEN_ID, {}).get("usd", 0)
+                if usd_price > 0 and self._sol_price_cache:
+                    # Very rough estimate if we only have SOL price
+                    token_usd = self._sol_price_cache / usd_price
+                    return token_usd
         except Exception as e:
             print(f"[AGT-04] CoinGecko fallback failed: {e}")
         return 0.0
@@ -226,10 +205,26 @@ class OracleAgent:
         self.running = True
         await self.connect_redis()
         self.session = aiohttp.ClientSession()
+        is_subscribed = True
         print("AGT-04: Oracle agent started")
 
         while self.running:
             try:
+                active = is_operational_window_active()
+
+                if active and not is_subscribed:
+                    await self.pubsub.subscribe(CHANNEL_POSITION_OPENED)
+                    is_subscribed = True
+                    print("AGT-04: [WINDOW OPEN] Resubscribed to position events")
+                elif not active and is_subscribed:
+                    await self.pubsub.unsubscribe()
+                    is_subscribed = False
+                    print("AGT-04: [OFF-HOURS] Unsubscribed from events to save resources")
+
+                if not active:
+                    await asyncio.sleep(60)
+                    continue
+
                 # Handle incoming position_opened messages
                 message = await self.pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
@@ -258,9 +253,7 @@ class OracleAgent:
         print("AGT-04: Oracle agent stopped")
 
 
-if __name__ == "__main__":
-    # Find project root
-
+async def main():
     # Find project root
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -282,6 +275,9 @@ if __name__ == "__main__":
 
     agent = OracleAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())

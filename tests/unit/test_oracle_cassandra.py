@@ -1,181 +1,383 @@
 import pytest
-import os
-import sys
-import json
-import runpy
-import uuid
-from unittest.mock import patch, MagicMock, AsyncMock, mock_open
 import asyncio
-from src.python.agents.oracle import OracleAgent
-from src.python.agents.cassandra import CassandraAgent
+import json
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from src.python.agents.oracle import OracleAgent, main as oracle_main
+from src.python.agents.cassandra import CassandraAgent, main as cassandra_main
 
-# --- Oracle Tests ---
+# Valid base58 strings for Solana addresses
+VALID_MINT = "So11111111111111111111111111111111111111112"
 
-@pytest.mark.asyncio
-async def test_oracle_agent_init():
+@pytest.fixture
+def oracle_agent():
     config = {"system": {"environment": "paper"}}
     agent = OracleAgent(config)
-    assert agent.config == config
+    agent.redis = AsyncMock()
+    agent.session = AsyncMock()
+    return agent
+
+@pytest.fixture
+def cassandra_agent():
+    config = {"system": {"environment": "paper"}}
+    agent = CassandraAgent(config)
+    agent.redis = AsyncMock()
+    agent.session = AsyncMock()
+    return agent
 
 @pytest.mark.asyncio
-async def test_oracle_agent_connect_redis():
-    config = {"system": {"environment": "paper"}}
-    agent = OracleAgent(config)
-    
-    mock_redis = MagicMock()
+async def test_oracle_connect_redis(oracle_agent):
+    mock_redis = AsyncMock()
     mock_pubsub = MagicMock()
-    mock_redis.pubsub.return_value = mock_pubsub
     mock_pubsub.subscribe = AsyncMock()
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
     
-    with patch("src.python.agents.oracle.aioredis.from_url", side_effect=AsyncMock(return_value=mock_redis)):
-        await agent.connect_redis()
-        assert agent.redis == mock_redis
-        assert agent.pubsub == mock_pubsub
+    with patch("aioredis.from_url", AsyncMock(return_value=mock_redis)):
+        await oracle_agent.connect_redis()
+        assert oracle_agent.redis == mock_redis
+        mock_pubsub.subscribe.assert_called_with("mtus:channel:position_opened")
 
 @pytest.mark.asyncio
-async def test_oracle_handle_position_opened():
-    config = {"system": {"environment": "paper"}}
-    agent = OracleAgent(config)
-    agent.redis = AsyncMock()
-    
-    payload = {
-        "mint": "fake_mint",
-        "symbol": "FAKE",
-        "position_id": "pos_1",
-        "entry_price": 0.1
+async def test_oracle_update_position_price(oracle_agent):
+    oracle_agent.positions["POS-1"] = {
+        "mint": VALID_MINT, 
+        "entry_price_sol": 1.0,
+        "last_prices": [1.0],
+        "fail_count": 0
     }
-    corr_id = str(uuid.uuid4())
-    envelope = json.dumps({
-        "agent_id": "AGT-07",
-        "event_type": "position_opened",
-        "payload": payload,
-        "correlation_id": corr_id
-    })
-    
-    await agent.handle_position_opened(envelope)
-    assert "pos_1" in agent.positions
+    with patch.object(oracle_agent, "fetch_price_jupiter", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = 1.1
+        await oracle_agent.update_position_price("POS-1", VALID_MINT)
+        assert oracle_agent.positions["POS-1"]["last_prices"][-1] == 1.1
 
 @pytest.mark.asyncio
-async def test_oracle_run_loop():
-    config = {"system": {"environment": "paper"}}
-    agent = OracleAgent(config)
-    agent.redis = AsyncMock()
-    agent.pubsub = MagicMock()
-    agent.connect_redis = AsyncMock()
-    corr_id = str(uuid.uuid4())
+async def test_oracle_run_loop(oracle_agent):
+    oracle_agent.connect_redis = AsyncMock()
+    oracle_agent.pubsub = MagicMock()
+    oracle_agent.pubsub.get_message = AsyncMock(return_value=None)
+    oracle_agent.update_position_price = AsyncMock()
+    oracle_agent.session = AsyncMock()
     
-    async def get_msg_then_stop(*args, **kwargs):
-        agent.running = False
-        return {"data": json.dumps({"agent_id": "AGT-07", "event_type": "position_opened", "payload": {"mint": "fake", "position_id": "pos_1"}, "correlation_id": corr_id})}
+    call_count = 0
+    def active_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise Exception("stop loop")
+        return True
         
-    agent.pubsub.get_message = AsyncMock(side_effect=get_msg_then_stop)
-    
-    with patch.object(agent, "handle_position_opened", return_value=None) as mock_handle, \
-         patch.object(agent, "update_position_price", return_value=None), \
-         patch("src.python.agents.oracle.asyncio.sleep", return_value=None):
-        await agent.run()
-        mock_handle.assert_called_once()
-
-# --- Cassandra Tests ---
-
-@pytest.mark.asyncio
-async def test_cassandra_agent_init():
-    config = {"system": {"environment": "paper"}}
-    agent = CassandraAgent(config)
-    assert agent.config == config
-
-@pytest.mark.asyncio
-async def test_cassandra_agent_connect_redis():
-    config = {"system": {"environment": "paper"}}
-    agent = CassandraAgent(config)
-    
-    mock_redis = MagicMock()
-    mock_pubsub = MagicMock()
-    mock_redis.pubsub.return_value = mock_pubsub
-    mock_pubsub.subscribe = AsyncMock()
-    
-    with patch("src.python.agents.cassandra.aioredis.from_url", side_effect=AsyncMock(return_value=mock_redis)):
-        await agent.connect_redis()
-        assert agent.redis == mock_redis
-        assert agent.pubsub == mock_pubsub
-
-@pytest.mark.asyncio
-async def test_cassandra_handle_token_received():
-    config = {"system": {"environment": "paper"}}
-    agent = CassandraAgent(config)
-    agent.redis = AsyncMock()
-    
-    payload = {
-        "mint": "fake_mint",
-        "symbol": "FAKE"
-    }
-    corr_id = str(uuid.uuid4())
-    envelope = json.dumps({
-        "agent_id": "AGT-03",
-        "event_type": "token_received",
-        "payload": payload,
-        "correlation_id": corr_id
-    })
-    
-    with patch.object(agent, "score_sentiment", return_value=80), \
-         patch.object(agent, "score_social_signals", return_value=70):
-        await agent.handle_token_received(envelope)
-        agent.redis.publish.assert_called()
-
-@pytest.mark.asyncio
-async def test_cassandra_run_loop():
-    config = {"system": {"environment": "paper"}}
-    agent = CassandraAgent(config)
-    agent.redis = AsyncMock()
-    agent.pubsub = MagicMock()
-    agent.connect_redis = AsyncMock()
-    corr_id = str(uuid.uuid4())
-    
-    async def get_msg_then_stop(*args, **kwargs):
-        agent.running = False
-        return {"data": json.dumps({"agent_id": "AGT-03", "event_type": "token_received", "payload": {"mint": "fake"}, "correlation_id": corr_id})}
-        
-    agent.pubsub.get_message = AsyncMock(side_effect=get_msg_then_stop)
-    
-    with patch.object(agent, "handle_token_received", return_value=None) as mock_handle, \
-         patch("src.python.agents.cassandra.asyncio.sleep", return_value=None):
-        await agent.run()
-        mock_handle.assert_called_once()
-
-# --- Entry Point Tests ---
-
-def test_cassandra_main_keyboard_interrupt():
-    import runpy
-    m = mock_open(read_data="system:\n  environment: paper\n")
-    with patch("src.python.agents.cassandra.open", m), \
-         patch("src.python.agents.cassandra.CassandraAgent") as mock_agent_class, \
-         patch("src.python.agents.cassandra.validate_config", return_value=(True, None)), \
-         patch("src.python.agents.cassandra.asyncio.run", side_effect=[KeyboardInterrupt(), None]) as mock_run:
-        
-        mock_agent_instance = mock_agent_class.return_value
+    with patch("src.python.agents.oracle.is_operational_window_active", side_effect=active_side_effect), \
+         patch("src.python.agents.oracle.asyncio.sleep", return_value=None), \
+         patch("src.python.agents.oracle.aiohttp.ClientSession", return_value=AsyncMock()):
         try:
-            runpy.run_module("src.python.agents.cassandra", run_name="__main__")
-        except SystemExit:
-            pass
+            await oracle_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
         
-        assert mock_run.call_count == 2
-        mock_agent_instance.run.assert_called()
-        mock_agent_instance.stop.assert_called()
+    oracle_agent.connect_redis.assert_awaited()
 
-def test_oracle_main_keyboard_interrupt():
-    import runpy
+@pytest.mark.asyncio
+async def test_oracle_handle_position_opened(oracle_agent):
+    corr_id = str(uuid.uuid4())
+    env_id = str(uuid.uuid4())
+    envelope = {
+        "agent_id": "AGT-01", "event_type": "position_opened",
+        "payload": {"position_id": "POS-1", "mint": VALID_MINT, "entry_price_sol": 1.0},
+        "correlation_id": corr_id, "envelope_id": env_id, "timestamp_utc": "2024-01-01T00:00:00Z"
+    }
+    await oracle_agent.handle_position_opened(json.dumps(envelope))
+    assert "POS-1" in oracle_agent.positions
+    
+    # Test error handling
+    await oracle_agent.handle_position_opened("invalid json")
+
+@pytest.mark.asyncio
+async def test_oracle_fetch_price_exceptions(oracle_agent):
+    oracle_agent.api_manager.request = AsyncMock(side_effect=Exception("api error"))
+    assert await oracle_agent.fetch_price_jupiter("mint") == 0.0
+    assert await oracle_agent.fetch_price_dexscreener("mint") == 0.0
+    assert await oracle_agent.fetch_price_birdeye("mint") == 0.0
+    assert await oracle_agent.fetch_price_coingecko("mint") == 0.0
+
+@pytest.mark.asyncio
+async def test_oracle_run_loop_off_hours(oracle_agent):
+    oracle_agent.connect_redis = AsyncMock()
+    oracle_agent.pubsub = MagicMock()
+    oracle_agent.pubsub.unsubscribe = AsyncMock()
+    call_count = 0
+    def side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return False
+        raise Exception("stop loop")
+
+    with patch("src.python.agents.oracle.is_operational_window_active", side_effect=side_effect), \
+         patch("src.python.agents.oracle.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+         patch("src.python.agents.oracle.aiohttp.ClientSession", return_value=AsyncMock()):
+        try:
+            await oracle_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
+    
+    mock_sleep.assert_any_call(60)
+
+@pytest.mark.asyncio
+async def test_oracle_run_loop_exception(oracle_agent):
+    oracle_agent.connect_redis = AsyncMock()
+    oracle_agent.pubsub = AsyncMock()
+    oracle_agent.pubsub.get_message = AsyncMock(side_effect=[Exception("loop error"), Exception("stop loop")])
+    
+    with patch("src.python.agents.oracle.is_operational_window_active", return_value=True), \
+         patch("src.python.agents.oracle.asyncio.sleep", new_callable=AsyncMock), \
+         patch("src.python.agents.oracle.aiohttp.ClientSession", return_value=AsyncMock()):
+        try:
+            await oracle_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
+
+@pytest.mark.asyncio
+async def test_oracle_fetch_prices(oracle_agent):
+    oracle_agent.api_manager.request = AsyncMock()
+    oracle_agent.api_manager.request.return_value = {VALID_MINT: {"usdPrice": "1.5"}}
+    assert await oracle_agent.fetch_price_jupiter(VALID_MINT) == 1.5
+    oracle_agent.api_manager.request.return_value = {"pairs": [{"priceUsd": "1.6"}]}
+    assert await oracle_agent.fetch_price_dexscreener(VALID_MINT) == 1.6
+    oracle_agent.api_manager.request.return_value = {"success": True, "data": {"value": 1.7}}
+    assert await oracle_agent.fetch_price_birdeye(VALID_MINT) == 1.7
+    oracle_agent._sol_price_cache = 150.0
+    oracle_agent.api_manager.request.return_value = {"solana": {"usd": 150.0}}
+    assert await oracle_agent.fetch_price_coingecko(VALID_MINT) == 1.0
+
+@pytest.mark.asyncio
+async def test_oracle_update_position_price_flow(oracle_agent):
+    oracle_agent.positions["P1"] = {"mint": VALID_MINT, "last_prices": [1.0], "fail_count": 0}
+    oracle_agent.redis = AsyncMock()
+    with patch.object(oracle_agent, "fetch_price_jupiter", return_value=1.1):
+        await oracle_agent.update_position_price("P1", VALID_MINT)
+        assert oracle_agent.positions["P1"]["last_prices"][-1] == 1.1
+        oracle_agent.redis.publish.assert_awaited()
+    oracle_agent.positions["P1"]["fail_count"] = 2
+    with patch.object(oracle_agent, "fetch_price_jupiter", return_value=0.0), \
+         patch.object(oracle_agent, "fetch_price_dexscreener", return_value=0.0), \
+         patch.object(oracle_agent, "fetch_price_birdeye", return_value=0.0):
+        await oracle_agent.update_position_price("P1", VALID_MINT)
+        assert oracle_agent.positions["P1"]["fail_count"] == 3
+        last_call = oracle_agent.redis.publish.call_args_list[-1]
+        assert "price_unavailable" in last_call[0][1]
+
+@pytest.mark.asyncio
+async def test_cassandra_run_loop(cassandra_agent):
+    cassandra_agent.connect_redis = AsyncMock()
+    cassandra_agent.pubsub = MagicMock()
+    cassandra_agent.pubsub.get_message = AsyncMock(return_value=None)
+    cassandra_agent.session = AsyncMock()
+    call_count = 0
+    def active_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise Exception("stop loop")
+        return True
+    with patch("src.python.agents.cassandra.is_operational_window_active", side_effect=active_side_effect), \
+         patch("src.python.agents.cassandra.asyncio.sleep", return_value=None), \
+         patch("src.python.agents.cassandra.aiohttp.ClientSession", return_value=AsyncMock()):
+        try:
+            await cassandra_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
+    cassandra_agent.connect_redis.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_cassandra_fetch_dexscreener_error(cassandra_agent):
+    cassandra_agent.api_manager.request = AsyncMock(side_effect=Exception("api down"))
+    result = await cassandra_agent.fetch_dexscreener_data("mint")
+    assert result is None
+
+@pytest.mark.asyncio
+async def test_cassandra_fetch_metadata_socials_error(cassandra_agent):
+    cassandra_agent.api_manager.request = AsyncMock(side_effect=Exception("api down"))
+    result = await cassandra_agent.fetch_metadata_socials("uri")
+    assert result == {"twitter": False, "telegram": False, "website": False}
+
+@pytest.mark.asyncio
+async def test_cassandra_score_sentiment_branches(cassandra_agent):
+    token = {"mint": "m1", "uri": "u1", "age": 86401}
+    dex_data = {"info": {"twitter": "t"}, "liquidity": {"usd": 150000}, "txns": {"h24": {"buys": 200, "sells": 50}}}
+    cassandra_agent.fetch_dexscreener_data = AsyncMock(return_value=dex_data)
+    score = await cassandra_agent.score_sentiment(token)
+    assert score == 90
+    token = {"mint": "m2", "uri": "u2", "age": 500}
+    dex_data = {"info": {}, "liquidity": {"usd": 20000}, "txns": {"h24": {"buys": 10, "sells": 100}}}
+    cassandra_agent.fetch_dexscreener_data = AsyncMock(return_value=dex_data)
+    cassandra_agent.fetch_metadata_socials = AsyncMock(return_value={"twitter": True, "telegram": False, "website": False})
+    score = await cassandra_agent.score_sentiment(token)
+    assert score == 60
+
+@pytest.mark.asyncio
+async def test_cassandra_run_loop_off_hours(cassandra_agent):
+    cassandra_agent.connect_redis = AsyncMock()
+    cassandra_agent.pubsub = MagicMock()
+    cassandra_agent.pubsub.unsubscribe = AsyncMock()
+    call_count = 0
+    def side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return False
+        raise Exception("stop loop")
+    with patch("src.python.agents.cassandra.is_operational_window_active", side_effect=side_effect), \
+         patch("src.python.agents.cassandra.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+         patch("src.python.agents.cassandra.aiohttp.ClientSession", return_value=AsyncMock()):
+        try:
+            await cassandra_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
+    mock_sleep.assert_any_call(60)
+
+@pytest.mark.asyncio
+async def test_cassandra_handle_token_received_exception(cassandra_agent):
+    with patch("src.python.shared.envelope.AgentMessageEnvelope.model_validate_json", side_effect=Exception("invalid")):
+        await cassandra_agent.handle_token_received("{}")
+
+@pytest.mark.asyncio
+async def test_cassandra_handle_token_received(cassandra_agent):
+    cassandra_agent.redis = AsyncMock()
+    corr_id = str(uuid.uuid4())
+    env_id = str(uuid.uuid4())
+    envelope = {
+        "agent_id": "AGT-01", "event_type": "token_received",
+        "payload": {"mint": VALID_MINT, "symbol": "T", "uri": "https://uri.com"},
+        "correlation_id": corr_id, "envelope_id": env_id, "timestamp_utc": "2024-01-01T00:00:00Z"
+    }
+    with patch.object(cassandra_agent, "score_sentiment", return_value=85.0):
+        await cassandra_agent.handle_token_received(json.dumps(envelope))
+        cassandra_agent.redis.publish.assert_awaited()
+    await cassandra_agent.handle_token_received("invalid")
+
+@pytest.mark.asyncio
+async def test_oracle_stop(oracle_agent):
+    await oracle_agent.stop()
+    assert oracle_agent.running is False
+    oracle_agent.redis.close.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_cassandra_stop(cassandra_agent):
+    await cassandra_agent.stop()
+    assert cassandra_agent.running is False
+    cassandra_agent.redis.close.assert_awaited()
+@pytest.mark.asyncio
+async def test_oracle_main_keyboard_interrupt():
     m = mock_open(read_data="system:\n  environment: paper\n")
     with patch("src.python.agents.oracle.open", m), \
          patch("src.python.agents.oracle.OracleAgent") as mock_agent_class, \
-         patch("src.python.agents.oracle.validate_config", return_value=(True, None)), \
-         patch("src.python.agents.oracle.asyncio.run", side_effect=[KeyboardInterrupt(), None]) as mock_run:
+         patch("src.python.agents.oracle.validate_config", return_value=(True, None)):
         
         mock_agent_instance = mock_agent_class.return_value
-        try:
-            runpy.run_module("src.python.agents.oracle", run_name="__main__")
-        except SystemExit:
-            pass
+        mock_agent_instance.run = AsyncMock(side_effect=KeyboardInterrupt())
+        mock_agent_instance.stop = AsyncMock()
         
-        assert mock_run.call_count == 2
-        mock_agent_instance.run.assert_called()
-        mock_agent_instance.stop.assert_called()
+        await oracle_main()
+        assert mock_agent_instance.run.called
+        assert mock_agent_instance.stop.called
+
+@pytest.mark.asyncio
+async def test_cassandra_main_keyboard_interrupt():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.cassandra.open", m), \
+         patch("src.python.agents.cassandra.CassandraAgent") as mock_agent_class, \
+         patch("src.python.agents.cassandra.validate_config", return_value=(True, None)):
+        
+        mock_agent_instance = mock_agent_class.return_value
+        mock_agent_instance.run = AsyncMock(side_effect=KeyboardInterrupt())
+        mock_agent_instance.stop = AsyncMock()
+        
+        await cassandra_main()
+        assert mock_agent_instance.run.called
+        assert mock_agent_instance.stop.called
+
+@pytest.mark.asyncio
+async def test_oracle_main_config_error():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.oracle.open", m), \
+         patch("src.python.agents.oracle.validate_config", return_value=(False, "error")), \
+         patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
+        
+        with pytest.raises(SystemExit) as exc:
+            await oracle_main()
+        assert exc.value.code == 1
+
+@pytest.mark.asyncio
+async def test_cassandra_main_config_error():
+    m = mock_open(read_data="system:\n  environment: paper\n")
+    with patch("src.python.agents.cassandra.open", m), \
+         patch("src.python.agents.cassandra.validate_config", return_value=(False, "error")), \
+         patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
+        
+        with pytest.raises(SystemExit) as exc:
+            await cassandra_main()
+        assert exc.value.code == 1
+
+@pytest.mark.asyncio
+async def test_cassandra_fetch_dexscreener_success(cassandra_agent):
+    cassandra_agent.api_manager.request = AsyncMock(return_value={"pair": {"liquidity": 100}})
+    res = await cassandra_agent.fetch_dexscreener_data("m")
+    assert res == {"liquidity": 100}
+
+@pytest.mark.asyncio
+async def test_cassandra_fetch_metadata_socials_alt_keys(cassandra_agent):
+    cassandra_agent.api_manager.request = AsyncMock(return_value={"Social": {"x": "twitter_link"}})
+    res = await cassandra_agent.fetch_metadata_socials("u")
+    assert res["twitter"] is True
+
+@pytest.mark.asyncio
+async def test_cassandra_score_sentiment_exception(cassandra_agent):
+    # This will trigger the AGT-08: Scoring error: line
+    with patch.object(cassandra_agent, "fetch_dexscreener_data", side_effect=Exception("scoring fail")):
+        res = await cassandra_agent.score_sentiment({"mint": "m"})
+        assert res == 0.0
+
+@pytest.mark.asyncio
+async def test_cassandra_handle_token_received_full(cassandra_agent):
+    cassandra_agent.redis = AsyncMock()
+    # Mock dexscreener info for handle_token_received
+    cassandra_agent.fetch_dexscreener_data = AsyncMock(return_value={"info": {"twitter": "t", "telegram": "tg", "website": "w"}})
+    envelope = {
+        "agent_id": "AGT-01", "event_type": "token_received",
+        "payload": {"mint": "m", "symbol": "S"},
+        "correlation_id": str(uuid.uuid4()), "envelope_id": str(uuid.uuid4()), "timestamp_utc": "2024-01-01T00:00:00Z"
+    }
+    await cassandra_agent.handle_token_received(json.dumps(envelope))
+    assert cassandra_agent.redis.publish.called
+
+@pytest.mark.asyncio
+async def test_cassandra_run_loop_resubscribe(cassandra_agent):
+    cassandra_agent.connect_redis = AsyncMock()
+    cassandra_agent.pubsub = MagicMock()
+    cassandra_agent.pubsub.subscribe = AsyncMock()
+    cassandra_agent.pubsub.unsubscribe = AsyncMock()
+    cassandra_agent.pubsub.get_message = AsyncMock(return_value=None)
+    
+    call_count = 0
+    def active_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1: return False # Off-hours, unsubscribe
+        if call_count == 2: return True  # Window opens, resubscribe
+        raise Exception("stop loop")
+
+    with patch("src.python.agents.cassandra.is_operational_window_active", side_effect=active_side_effect), \
+         patch("src.python.agents.cassandra.asyncio.sleep", return_value=None), \
+         patch("src.python.agents.cassandra.aiohttp.ClientSession", return_value=AsyncMock()):
+        try:
+            await cassandra_agent.run()
+        except Exception as e:
+            if "stop loop" not in str(e): raise
+    
+    assert cassandra_agent.pubsub.subscribe.called
+
+@pytest.mark.asyncio
+async def test_oracle_fetch_price_coingecko_error(oracle_agent):
+    oracle_agent.api_manager.request = AsyncMock(return_value=None)
+    res = await oracle_agent.fetch_price_coingecko("m")
+    assert res == 0.0

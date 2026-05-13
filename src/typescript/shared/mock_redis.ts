@@ -6,7 +6,7 @@
 import { EventEmitter } from 'events';
 
 // Singleton store for cross-instance communication
-class MockRedisStore {
+export class MockRedisStore {
   private static instance: MockRedisStore;
   private data: Map<string, string> = new Map();
   private channelCallbacks: Map<string, Set<(msg: string) => void>> = new Map();
@@ -22,6 +22,7 @@ class MockRedisStore {
   reset(): void {
     this.data.clear();
     this.channelCallbacks.clear();
+    this.emitter.removeAllListeners();
   }
   
   get(key: string): string | null {
@@ -126,3 +127,7 @@ class MockRedis extends EventEmitter {
 }
 
 export default MockRedis;
+
+export function resetMockRedis(): void {
+  MockRedisStore.getInstance().reset();
+}

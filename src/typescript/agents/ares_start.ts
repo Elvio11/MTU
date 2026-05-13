@@ -14,7 +14,7 @@ try {
   console.log('[CONFIG] Validation skipped:', e.message);
 }
 
-async function aresMain() {
+export async function aresMain() {
   console.log('='.repeat(50));
   console.log('Ares Agent (AGT-05) - Trade Executor');
   console.log('='.repeat(50));
@@ -67,4 +67,6 @@ async function aresMain() {
   }
 }
 
-aresMain();
+if (require.main === module) {
+  aresMain();
+}

@@ -14,7 +14,7 @@ try {
   console.log('[CONFIG] Validation skipped:', e.message);
 }
 
-async function main() {
+export async function janusMain() {
   console.log('='.repeat(50));
   console.log('Janus Agent (AGT-07) - Capital Manager');
   console.log('='.repeat(50));
@@ -22,7 +22,8 @@ async function main() {
   const agent = new JanusAgent();
   
   try {
-    console.log('[OK] Agent created');
+    await agent.init();
+    console.log('[OK] Agent initialized');
     
     // Read passphrases from stdin in production (Section 4.1)
     const { readPassphraseStdin } = require('../shared/passphrase.js');
@@ -69,4 +70,6 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  janusMain();
+}

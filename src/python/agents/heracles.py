@@ -12,6 +12,7 @@ load_dotenv("./.env")
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
+from src.python.shared.operational_window import is_operational_window_active
 from src.python.shared.constants import is_paper_mode, CHANNEL_KILL_SWITCH_TRIGGERED, CHANNEL_HEALTH_CHECK
 
 HEALTH_CHECK_INTERVAL = 10
@@ -27,6 +28,13 @@ class HeraclesAgent:
         self.daily_pnl: float = 0.0
         self.paper_trades: list = []
         self.config = config
+        
+        # Initialize API Manager for notifications
+        from src.python.shared.api_manager import GlobalApiManager, ApiProvider
+        self.api_manager = GlobalApiManager()
+        self.api_manager.setup_router("notifications", [
+            ApiProvider("telegram", "https://api.telegram.org", capacity=30, refill_rate=1)
+        ])
 
     async def connect_redis(self):
         import aioredis
@@ -91,13 +99,8 @@ class HeraclesAgent:
             token = getenv("TELEGRAM_BOT_TOKEN")
             chat_id = getenv("TELEGRAM_ADMIN_CHAT_ID")
             if token and chat_id:
-                import aiohttp
-
-                async with aiohttp.ClientSession() as session:
-                    await session.get(
-                        f"https://api.telegram.org/bot{token}/sendMessage",
-                        params={"chat_id": chat_id, "text": message},
-                    )
+                path = f"/bot{token}/sendMessage"
+                await self.api_manager.request("notifications", "GET", provider="telegram", path=path, params={"chat_id": chat_id, "text": message}, timeout=10)
         except Exception as e:
             print(f"AGT-10: Telegram alert failed: {e}")
 
@@ -117,15 +120,23 @@ class HeraclesAgent:
         print("AGT-10: Guardian agent started")
 
         while self.running:
-            await self.check_agent_health()
-            envelope = AgentMessageEnvelope(
-                agent_id="AGT-10",
-                event_type="health_check",
-                payload={"status": "healthy", "daily_pnl": self.daily_pnl},
-                correlation_id=str(uuid.uuid4()),
-            )
-            await self.redis.publish(CHANNEL_HEALTH_CHECK, envelope.model_dump_json())
-            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            try:
+                if not is_operational_window_active():
+                    await asyncio.sleep(60)
+                    continue
+
+                await self.check_agent_health()
+                envelope = AgentMessageEnvelope(
+                    agent_id="AGT-10",
+                    event_type="health_check",
+                    payload={"status": "healthy", "daily_pnl": self.daily_pnl},
+                    correlation_id=str(uuid.uuid4()),
+                )
+                await self.redis.publish(CHANNEL_HEALTH_CHECK, envelope.model_dump_json())
+                await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            except Exception as e:
+                print(f"AGT-10: Error in guardian loop: {e}")
+                await asyncio.sleep(1)
 
     async def stop(self):
         self.running = False
@@ -134,7 +145,7 @@ class HeraclesAgent:
         print("AGT-10: Guardian agent stopped")
 
 
-if __name__ == "__main__":
+async def main():
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
@@ -154,6 +165,9 @@ if __name__ == "__main__":
 
     agent = HeraclesAgent(config)
     try:
-        asyncio.run(agent.run())
+        await agent.run()
     except KeyboardInterrupt:
-        asyncio.run(agent.stop())
+        await agent.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
