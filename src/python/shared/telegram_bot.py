@@ -935,9 +935,16 @@ Need {trades_needed} more paper trades with >40% win rate.""",
             text = NotificationTemplates.stop_loss(pos_id, mint, pnl_sol)
             
         elif channel == "mtus:channel:trade_failed":
-            mint = payload.get("mint", "N/A")
-            reason = payload.get("reason", "unknown error")
-            text = NotificationTemplates.system_alert("ERROR", f"Trade failed for <code>{mint}</code>\nReason: {reason}")
+            # Support both nesting forms (Anansi python with nested 'token' vs Ares TS with flat keys)
+            token_details = payload.get("token")
+            if isinstance(token_details, dict):
+                mint = token_details.get("mint", "N/A")
+            else:
+                token_details = None
+                mint = payload.get("mint", "N/A")
+                
+            reason = payload.get("reason") or payload.get("error") or "unknown error"
+            text = NotificationTemplates.trade_failed(mint, reason, token_details)
             
         elif channel == "mtus:channel:system_alert":
             level = payload.get("level", "INFO")

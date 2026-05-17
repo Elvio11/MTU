@@ -69,3 +69,27 @@ def test_position_closed():
     assert "id1" in result
     assert "+0.1000 SOL" in result
     assert "TP2" in result
+
+def test_trade_failed():
+    # Without token details
+    result = NotificationTemplates.trade_failed("mint123", "Insufficient balance")
+    assert "❌ <b>Trade Failed</b>" in result
+    assert "mint123" in result
+    assert "Insufficient balance" in result
+    assert "Execution failed" in result
+
+    # With token details
+    token_details = {
+        "name": "SuperCoin",
+        "symbol": "SUP",
+        "market_cap": 150000.50,
+        "volume_24h": 5000.00
+    }
+    result_with_details = NotificationTemplates.trade_failed("mint123", "Failed gates", token_details)
+    assert "❌ <b>Trade Failed</b>" in result_with_details
+    assert "SuperCoin" in result_with_details
+    assert "SUP" in result_with_details
+    assert "$150,000.50" in result_with_details
+    assert "$5,000.00" in result_with_details
+    assert "Failed gates" in result_with_details
+

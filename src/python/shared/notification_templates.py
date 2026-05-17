@@ -102,6 +102,48 @@ Total PnL: {total_pnl:+.4f} SOL
 {message}"""
 
     @staticmethod
+    def trade_failed(
+        mint: str,
+        reason: str,
+        token_details: Optional[Dict] = None
+    ) -> str:
+        """Trade failed notification with coin details"""
+        if token_details:
+            name = token_details.get("name", "N/A")
+            symbol = token_details.get("symbol", "N/A")
+            mcap = token_details.get("market_cap") or token_details.get("market_cap_usd") or 0.0
+            volume = token_details.get("volume_24h") or token_details.get("volume") or 0.0
+            
+            # Format numbers beautifully
+            if isinstance(mcap, (int, float)):
+                mcap_str = f"${mcap:,.2f}" if mcap > 0 else "N/A"
+            else:
+                mcap_str = str(mcap)
+                
+            if isinstance(volume, (int, float)):
+                vol_str = f"${volume:,.2f}" if volume > 0 else "N/A"
+            else:
+                vol_str = str(volume)
+                
+            return f"""❌ <b>Trade Failed</b>
+
+<b>Token:</b> {name} ({symbol})
+<b>Mint:</b> <code>{mint}</code>
+<b>Reason:</b> {reason}
+
+<b>Market Cap:</b> {mcap_str}
+<b>24h Volume:</b> {vol_str}
+
+<i>Skipped or execution failed</i>"""
+        else:
+            return f"""❌ <b>Trade Failed</b>
+
+<b>Mint:</b> <code>{mint}</code>
+<b>Reason:</b> {reason}
+
+<i>Execution failed</i>"""
+
+    @staticmethod
     def agent_status(agent_id: str, status: str, details: str = "") -> str:
         """Agent health status"""
         emoji = "✅" if status == "healthy" else "❌"

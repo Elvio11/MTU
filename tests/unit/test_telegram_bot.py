@@ -260,3 +260,50 @@ async def test_handle_sweep_with_otp(bot):
         with patch.object(bot, "_execute_sweep", new_callable=AsyncMock) as mock_exec:
             await bot.handle_sweep("12345", "/sweep 123456", ["123456"])
             mock_exec.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_handle_pubsub_event_trade_failed(bot):
+    # Test Ares/TS event style (flat payload with 'mint' and 'error')
+    ts_data = {
+        "payload": {
+            "mint": "mint_flat",
+            "error": "Slippage exceeded"
+        }
+    }
+    
+    with patch.object(bot, "send_message", new_callable=AsyncMock) as mock_send:
+        await bot.handle_pubsub_event("mtus:channel:trade_failed", ts_data)
+        mock_send.assert_called_once()
+        args, kwargs = mock_send.call_args
+        assert args[0] == "12345"
+        assert "mint_flat" in args[1]
+        assert "Slippage exceeded" in args[1]
+        assert "Trade Failed" in args[1]
+        assert "Execution failed" in args[1]
+
+    # Test Anansi/Python event style (nested payload with 'token')
+    python_data = {
+        "payload": {
+            "token": {
+                "name": "FailedToken",
+                "symbol": "FT",
+                "mint": "mint_nested",
+                "market_cap": 25000.0,
+                "volume_24h": 1200.0
+            },
+            "reason": "Failed RugCheck gate"
+        }
+    }
+    
+    with patch.object(bot, "send_message", new_callable=AsyncMock) as mock_send_py:
+        await bot.handle_pubsub_event("mtus:channel:trade_failed", python_data)
+        mock_send_py.assert_called_once()
+        args, kwargs = mock_send_py.call_args
+        assert args[0] == "12345"
+        assert "mint_nested" in args[1]
+        assert "Failed RugCheck gate" in args[1]
+        assert "FailedToken" in args[1]
+        assert "FT" in args[1]
+        assert "$25,000.00" in args[1]
+        assert "$1,200.00" in args[1]
+
