@@ -223,18 +223,6 @@ export class SentinelAgent {
     }
 
     if (position.state === 'OPEN') {
-      // Check time-based stop loss (Max Hold Time)
-      const entryTime = new Date(position.entry_timestamp_utc).getTime();
-      const elapsedHours = (Date.now() - entryTime) / (1000 * 60 * 60);
-      const maxHoldHours = this.config.trading?.time_sl_hours || 0.5;
-
-      if (elapsedHours >= maxHoldHours) {
-        console.log(`AGT-06: [TIME-SL] Max hold time reached (${(maxHoldHours * 60).toFixed(1)}m) for ${position.mint.slice(0, 8)}`);
-        position.state = 'STOP_LOSS';
-        await this.sellPortion(position, 1.0, 'stop_loss_hit');
-        return;
-      }
-
       if (currentPrice >= position.tp1_price) {
         position.state = 'CLOSED';
         await this.sellPortion(position, 1.0, 'tp1_hit');
@@ -493,6 +481,7 @@ export class SentinelAgent {
           // ✅ Evict from monitoring map so it is never retried
           position.state = 'CLOSED';
           this.positions.delete(position.position_id);
+          await this.redis.srem('mtus:active_positions', position.position_id);
 
           await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
 
@@ -520,6 +509,7 @@ export class SentinelAgent {
         console.error(`AGT-06: [CLI-FAIL] CLI sell failed for ${position.mint.slice(0,8)}: ${cliErr.message}`);
         position.state = 'FAILED';
         this.positions.delete(position.position_id);
+        await this.redis.srem('mtus:active_positions', position.position_id);
         await updatePosition.run({
           position_id: position.position_id,
           state: 'FAILED',
@@ -536,6 +526,7 @@ export class SentinelAgent {
       console.log(`AGT-06: [SELL-ERROR] Unexpected sell error for ${position.mint.slice(0,8)}: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
       position.state = 'FAILED';
       this.positions.delete(position.position_id);
+      await this.redis.srem('mtus:active_positions', position.position_id);
     }
   }
 
@@ -631,6 +622,7 @@ export class SentinelAgent {
     for (const [id, position] of this.positions) {
        if (position.state === 'CLOSED' || position.state === 'FAILED') {
          this.positions.delete(id);
+         await this.redis.srem('mtus:active_positions', id);
        }
     }
 

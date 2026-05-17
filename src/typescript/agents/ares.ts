@@ -487,6 +487,7 @@ export class AresAgent {
           };
 
           await insertPosition.run(position);
+          await this.rateLimiter.recordTrade(correlationId);
           
           const envelope = createEnvelope('AGT-05', 'position_opened', {
             ...position,
@@ -548,6 +549,8 @@ export class AresAgent {
               entry_timestamp_utc: new Date().toISOString(),
             };
 
+            await this.rateLimiter.recordTrade(correlationId);
+
             const envelope = createEnvelope('AGT-05', 'position_opened', {
               ...position,
               position_size_sol: (this.config?.trading?.position_size_sol || 0.0005),
@@ -569,6 +572,7 @@ export class AresAgent {
           position_size_sol: (this.config?.trading?.position_size_sol || 0.0005),
         }, correlationId);
         await this.redis.publish(CHANNEL_POSITION_OPENED, JSON.stringify(envelope));
+        await this.rateLimiter.recordTrade(correlationId);
 
         console.log(`AGT-05: [PAPER] Paper position opened (fallback) for ${mint}`);
 
