@@ -286,14 +286,34 @@ export class SentinelAgent {
         
         if (this.isPaperMode()) {
           console.log(`AGT-06: [PAPER] Simulated PUMP sell ${portion*100}% for ${mint}`);
+          const exitPriceSol = position.peak_price_sol;
+          const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
+          const paperTxId = `paper_pump_sell_${Date.now()}`;
+
           const envelope = createEnvelope('AGT-06', eventType, {
             position_id: position.position_id,
             mint: position.mint,
             sell_portion: portion,
-            exit_price: position.peak_price_sol, // Mock price
-            tx_signature: `paper_pump_sell_${Date.now()}`,
+            exit_price: exitPriceSol,
+            realised_pnl_sol: realised_pnl_sol,
+            tx_signature: paperTxId,
             isPaper: true,
           });
+
+          await updatePosition.run({
+            position_id: position.position_id,
+            state: 'CLOSED',
+            peak_price_sol: position.peak_price_sol,
+            exit_price_sol: exitPriceSol,
+            exit_tx_signature: paperTxId,
+            realised_pnl_sol: realised_pnl_sol,
+            updated_at: new Date().toISOString()
+          });
+
+          position.state = 'CLOSED';
+          this.positions.delete(position.position_id);
+          await this.redis.srem('mtus:active_positions', position.position_id);
+
           await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
           return;
         }
@@ -315,7 +335,8 @@ export class SentinelAgent {
         const tokensToSell = BigInt(Math.floor(position.tokens_received * portion * 1e6));
         
         // Calculate minSolOutput using constant product
-        const vTokenReserves = BigInt(pumpReserves.virtual_token_reserves);
+        // Note: virtual_token_reserves from pump.fun is in whole tokens, multiply by 1e6 to align with tokensToSell (micro-tokens)
+        const vTokenReserves = BigInt(pumpReserves.virtual_token_reserves) * 1000000n;
         const vSolReserves = BigInt(pumpReserves.virtual_sol_reserves);
         
         // dS = vSolReserves - (vSolReserves * vTokenReserves) / (vTokenReserves + tokensToSell)
@@ -368,13 +389,31 @@ export class SentinelAgent {
         const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true });
         console.log(`AGT-06: [PUMP-SELL] ✅ Broadcast: ${signature}`);
 
+        const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
+
         const envelope = createEnvelope('AGT-06', eventType, {
           position_id: position.position_id,
           mint: position.mint,
           sell_portion: portion,
-          exit_price: Number(expectedSol) / 1e9 / (Number(tokensToSell) / 1e6),
+          exit_price: exitPriceSol,
+          realised_pnl_sol: realised_pnl_sol,
           tx_signature: signature,
         });
+
+        await updatePosition.run({
+          position_id: position.position_id,
+          state: 'CLOSED',
+          peak_price_sol: position.peak_price_sol,
+          exit_price_sol: exitPriceSol,
+          exit_tx_signature: signature,
+          realised_pnl_sol: realised_pnl_sol,
+          updated_at: new Date().toISOString()
+        });
+
+        position.state = 'CLOSED';
+        this.positions.delete(position.position_id);
+        await this.redis.srem('mtus:active_positions', position.position_id);
+
         await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
         return;
       }
@@ -427,22 +466,43 @@ export class SentinelAgent {
         console.warn(`AGT-06: [SELL] Quote fetch failed, using fallback for PnL`);
       }
       
-      const exitPriceSol = quote && quote.outAmount ? Number(quote.outAmount) / 1e9 : position.peak_price_sol;
+      const exitPriceSol = quote && quote.outAmount 
+        ? (Number(quote.outAmount) / 1e9) / (position.tokens_received * portion) 
+        : position.peak_price_sol;
       console.log(`AGT-06: [${this.isPaperMode() ? 'PAPER' : 'LIVE'}] Exit estimate for ${position.mint}: ${exitPriceSol} SOL`);
       
       if (this.isPaperMode()) {
         const paperTxId = `paper_sell_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         console.log(`AGT-06: [PAPER] Simulated sell ${portion*100}% for ${position.mint}, exit price: ${exitPriceSol} SOL`);
         
+        const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
+
         const envelope = createEnvelope('AGT-06', eventType, {
           position_id: position.position_id,
           mint: position.mint,
           sell_portion: portion,
           exit_price: exitPriceSol,
           current_price: position.peak_price_sol,
+          realised_pnl_sol: realised_pnl_sol,
           tx_signature: paperTxId,
           isPaper: true,
         });
+
+        await updatePosition.run({
+          position_id: position.position_id,
+          state: 'CLOSED',
+          peak_price_sol: position.peak_price_sol,
+          exit_price_sol: exitPriceSol,
+          exit_tx_signature: paperTxId,
+          realised_pnl_sol: realised_pnl_sol,
+          updated_at: new Date().toISOString()
+        });
+
+        // ✅ Evict from monitoring map so it is never retried
+        position.state = 'CLOSED';
+        this.positions.delete(position.position_id);
+        await this.redis.srem('mtus:active_positions', position.position_id);
+
         await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
         return;
       }

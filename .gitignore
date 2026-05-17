@@ -1,21 +1,47 @@
+# =============================================================================
+# Dependencies
+# =============================================================================
 **/node_modules/
-dist/
-build/
-.env
-.env.example
-__pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
+**/dist/
+**/build/
 venv/
 env/
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# =============================================================================
+# Environment & Secrets (NEVER commit)
+# =============================================================================
+.env
+.env.local
+.env.*.local
+*.keystore
+keystores/
+
+# =============================================================================
+# Logs
+# =============================================================================
 logs/
 *.log
 agents.log
 agents_output.log
 bot.log
 ares.log
-scratch/
+
+# =============================================================================
+# Test & Coverage Output
+# =============================================================================
+test-results/
 test_results_*.txt
 test_results_py.txt
 test_results_ts.txt
@@ -27,36 +53,85 @@ final_coverage.txt
 .coverage
 coverage/
 coverage.json
-test-results/
-mtus.db
-redis.zip
-redis/
-keystores/
-DTraderdata/
-DTradergraphify-out/
-graphify-out/
-.vscode/
-.idea/
-.DS_Store
+coverage_py.json
+coverage_report.txt
+coverage_ts.txt
+htmlcov/
 
-# Ignore local root scripts and temp files
-/*.py
-!/conftest.py
-/*.js
-!/jest.config.js
-!/ecosystem.config.js
-/*.bat
-/*.ps1
-/*.sh
-/*.txt
-!/requirements.txt
-/*.html
-/*.bak
-*.bak
-incident_report.json
-
-# Ignore sensitive data and configs
+# =============================================================================
+# Databases & Data
+# =============================================================================
+*.db
 data/*.db
 data/*.json
+mtus.db
+positions.db
+test_err.db
+
+# =============================================================================
+# Redis (Windows bundle)
+# =============================================================================
+redis.zip
+redis/
+
+# =============================================================================
+# Dashboard
+# =============================================================================
+dashboard/.next/
+dashboard/out/
+dashboard/node_modules/
+
+# =============================================================================
+# MCP Server
+# =============================================================================
+mtus-mcp/dist/
+mtus-mcp/node_modules/
+
+# =============================================================================
+# IDE & Editor
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# =============================================================================
+# Scratch & Temp
+# =============================================================================
+scratch/
+nul
+*.bak
+*.bak.*
+srctypescriptagentsares.ts.bak
+
+# =============================================================================
+# Generated/Build
+# =============================================================================
+TECHNICAL_DOCUMENTATION.html
+graphify-out/
+D:Traderdata/
+D:Tradergraphify-out/
+
+# =============================================================================
+# Config (local overrides)
+# =============================================================================
 config/config.yaml
 config/config.schema.json
+
+# =============================================================================
+# Reports & Artifacts
+# =============================================================================
+incident_report.json
+AUDIT_REPORT.md
+FINAL_VERIFICATION_REPORT.md
+readiness_output.txt
+temp_approved.txt
+temp_logs.txt
+
+# =============================================================================
+# OS
+# =============================================================================
+Thumbs.db
+desktop.ini

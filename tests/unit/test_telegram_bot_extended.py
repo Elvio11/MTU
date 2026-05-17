@@ -470,15 +470,18 @@ async def test_inline_button_url(bot):
 
 @pytest.mark.asyncio
 async def test_start_method(bot):
+    bot.redis = AsyncMock()
     with patch.object(bot, "initialize", new_callable=AsyncMock) as mock_init:
         with patch.object(
             bot, "send_welcome_message", new_callable=AsyncMock
         ) as mock_welcome:
             with patch.object(bot, "poll_updates", new_callable=AsyncMock) as mock_poll:
-                await bot.start()
-                mock_init.assert_called_once()
-                mock_welcome.assert_called_once()
-                mock_poll.assert_called_once()
+                with patch.object(bot, "listen_redis_pubsub", new_callable=AsyncMock) as mock_redis_pub:
+                    await bot.start()
+                    mock_init.assert_called_once()
+                    mock_welcome.assert_called_once()
+                    mock_poll.assert_called_once()
+                    mock_redis_pub.assert_called_once()
 
 
 @pytest.mark.asyncio

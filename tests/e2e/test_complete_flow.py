@@ -454,6 +454,7 @@ class TestCompleteFlow:
         """Test: Events are logged to Redis."""
         redis = clean_redis
         correlation_id = str(uuid.uuid4())
+        test_key = "mtus:event:trade_approved:test_logging"
 
         envelope = AgentMessageEnvelope(
             agent_id="AGT-03",
@@ -462,9 +463,9 @@ class TestCompleteFlow:
             correlation_id=correlation_id,
         )
 
-        await redis.lpush(f"event:trade_approved:0", envelope.model_dump_json())
+        await redis.lpush(test_key, envelope.model_dump_json())
 
-        events = await redis.lrange(f"event:trade_approved:0", 0, 0)
+        events = await redis.lrange(test_key, 0, 0)
         assert len(events) == 1
 
         logged_event = json.loads(events[0])
