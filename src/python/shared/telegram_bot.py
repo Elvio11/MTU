@@ -119,7 +119,10 @@ class TelegramBot:
     async def start(self):
         await self.initialize()
         await self.send_welcome_message()
-        await self.poll_updates()
+        await asyncio.gather(
+            self.poll_updates(),
+            self.listen_redis_pubsub()
+        )
 
     async def poll_updates(self):
         offset = 0
@@ -848,6 +851,102 @@ Need {trades_needed} more paper trades with >40% win rate.""",
         await self.edit_message(
             chat_id, callback_query["message"]["message_id"], status, keyboard
         )
+
+    async def listen_redis_pubsub(self):
+        import json
+        
+        pubsub = self.redis.pubsub()
+        channels = [
+            "mtus:channel:position_opened",
+            "mtus:channel:position_closed",
+            "mtus:channel:system_alert",
+            "mtus:channel:trade_failed",
+            "mtus:channel:token_qualified",
+            "mtus:channel:tp1_hit",
+            "mtus:channel:tp2_hit",
+            "mtus:channel:stop_loss_hit",
+            "mtus:channel:trailing_stop_hit",
+            "mtus:channel:time_sl_hit",
+        ]
+        
+        for ch in channels:
+            await pubsub.subscribe(ch)
+            
+        print(f"[BOT] Subscribed to Redis pub/sub channels: {channels}")
+        
+        while self.running:
+            try:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message["type"] == "message":
+                    channel = message["channel"]
+                    data_str = message["data"]
+                    try:
+                        data = json.loads(data_str)
+                        await self.handle_pubsub_event(channel, data)
+                    except Exception as e:
+                        print(f"[BOT] Error handling pubsub event on {channel}: {e}")
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"[BOT] Error in pubsub listen loop: {e}")
+                await asyncio.sleep(5)
+
+    async def handle_pubsub_event(self, channel: str, data: dict):
+        from .notification_templates import NotificationTemplates, add_environment_tag
+        
+        payload = data.get("payload", data)
+        env = os.getenv("MTUS_ENVIRONMENT", "production").upper()
+        
+        text = ""
+        parse_mode = "HTML"
+        
+        if channel == "mtus:channel:token_qualified":
+            text = NotificationTemplates.token_qualified(payload)
+            
+        elif channel == "mtus:channel:position_opened":
+            pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")
+            mint = payload.get("mint", "N/A")
+            size_sol = float(payload.get("position_size_sol") or payload.get("size_sol") or 0.0)
+            entry_price = float(payload.get("entry_price_sol") or payload.get("entryPriceSol") or 0.0)
+            text = NotificationTemplates.trade_opened(pos_id, mint, size_sol, entry_price)
+            
+        elif channel == "mtus:channel:position_closed":
+            pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")
+            mint = payload.get("mint", "N/A")
+            pnl_sol = float(payload.get("realised_pnl_sol") or payload.get("pnl_sol") or payload.get("pnl") or 0.0)
+            reason = payload.get("reason", "manual_exit")
+            text = NotificationTemplates.position_closed(pos_id, mint, pnl_sol, reason, env)
+            
+        elif channel == "mtus:channel:tp1_hit":
+            pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")
+            mint = payload.get("mint", "N/A")
+            pnl_sol = float(payload.get("realised_pnl_sol") or payload.get("pnl_sol") or payload.get("pnl") or 0.0)
+            text = NotificationTemplates.tp1_hit(pos_id, mint, pnl_sol)
+            
+        elif channel == "mtus:channel:tp2_hit":
+            pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")
+            mint = payload.get("mint", "N/A")
+            pnl_sol = float(payload.get("realised_pnl_sol") or payload.get("pnl_sol") or payload.get("pnl") or 0.0)
+            text = NotificationTemplates.tp2_hit(pos_id, mint, pnl_sol)
+            
+        elif channel in ["mtus:channel:stop_loss_hit", "mtus:channel:trailing_stop_hit", "mtus:channel:time_sl_hit"]:
+            pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")
+            mint = payload.get("mint", "N/A")
+            pnl_sol = float(payload.get("realised_pnl_sol") or payload.get("pnl_sol") or payload.get("pnl") or 0.0)
+            text = NotificationTemplates.stop_loss(pos_id, mint, pnl_sol)
+            
+        elif channel == "mtus:channel:trade_failed":
+            mint = payload.get("mint", "N/A")
+            reason = payload.get("reason", "unknown error")
+            text = NotificationTemplates.system_alert("ERROR", f"Trade failed for <code>{mint}</code>\nReason: {reason}")
+            
+        elif channel == "mtus:channel:system_alert":
+            level = payload.get("level", "INFO")
+            message = payload.get("message", "")
+            text = NotificationTemplates.system_alert(level, message)
+            
+        if text:
+            text = add_environment_tag(text)
+            await self.send_message(self.admin_chat_id, text, parse_mode=parse_mode)
 
     async def notify(self, message: str, priority: str = "normal"):
         if self.admin_chat_id:

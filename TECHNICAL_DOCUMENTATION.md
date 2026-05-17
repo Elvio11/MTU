@@ -47,7 +47,7 @@ graph TB
     
     subgraph "Data Layer"
         REDIS[(Redis Pub/Sub)]
-        DB[(SQLite Positions)]
+        DB[(PostgreSQL Positions)]
         CONSTANTS[Constants Module<br/>mtus: prefix]
     end
     
@@ -78,7 +78,7 @@ graph TB
 | Component | State Storage | Mechanism |
 |-----------|---------------|-----------|
 | Agent Health | Redis | `mtus:agent:{agent_id}:health` |
-| Active Positions | Redis + SQLite | Redis Set + DB table |
+| Active Positions | Redis + PostgreSQL | Redis Set + DB table |
 | Token Dedup | Redis | `dedup:{mint}` with 24h TTL |
 | Circuit Breaker | Redis | `mtus:circuit:{rpc_name}` |
 | Rate Limiting | Redis | Hourly keys `mtus:trade_count:{hour}` |
@@ -104,7 +104,7 @@ D:\Trader/
 │   ├── sniper.keystore               # Encrypted sniper wallet
 │   └── main.keystore                 # Encrypted main wallet
 ├── data/
-│   └── positions.db                  # SQLite database
+│   └── positions.db                  # Fallback SQLite database (sandbox only)
 ├── redis/
 │   ├── redis-server.exe              # Redis for Windows
 │   └── redis-cli.exe
@@ -151,10 +151,10 @@ D:\Trader/
 │       │   ├── ares.test.ts         # Unit tests
 │       │   ├── sentinel.test.ts     # Unit tests
 │       │   └── janus.test.ts        # Unit tests
-│       └── shared/
-│           ├── envelope.ts          # Message schema
-│           ├── keystore.ts          # Keypair loading
-│           ├── db.ts                # SQLite (better-sqlite3)
+│        └── shared/
+            ├── envelope.ts          # Message schema
+            ├── keystore.ts          # Keypair loading
+            ├── db.ts                # PostgreSQL connection (node-postgres pool-backed)
 │           ├── circuit-breaker.ts   # RPC health
 │           ├── operational-window.ts # Time check
 │           ├── mock_redis.ts        # Test fallback
@@ -206,7 +206,7 @@ D:\Trader/
 | `hermes.py` | Subscribes to `mtus:channel:token_detected`, routes to Anansi and Cassandra via `mtus:channel:token_received` |
 | `anansi.py` | Runs 10-gate safety qualification (G1-G11), publishes `mtus:channel:trade_approved` or `mtus:channel:trade_failed` |
 | `oracle.py` | Polls prices every 5s from Jupiter/DexScreener/Birdeye, publishes `mtus:channel:price_updated` |
-| `ares.ts` | Executes Jupiter swaps, broadcasts to RPC, records positions in SQLite |
+| `ares.ts` | Executes Jupiter swaps, broadcasts to RPC, records positions in PostgreSQL |
 | `sentinel.ts` | Monitors open positions, triggers TP/SL based on state machine |
 | `cassandra.py` | Fetches social sentiment scores from Twitter/Telegram APIs |
 | `ledger.py` | Records all trade events to audit_ledger table |
@@ -222,7 +222,7 @@ D:\Trader/
 | `keystore.py/ts` | Argon2id KDF + XSalsa20-Poly1305 encryption for wallet keys |
 | `circuit_breaker.py/ts` | Tracks RPC failures, opens circuit after 3 consecutive failures |
 | `operational_window.py/ts` | Checks if current time is within trading window |
-| `db.ts` | SQLite with better-sqlite3, position/audit tables |
+| `db.ts` | PostgreSQL with node-postgres pool, position/audit tables |
 | `telegram_bot.py` | 10 commands: /start, /status, /killswitch, /exit, etc. |
 | `telegram_auth.py` | HMAC-SHA256 OTP generation/verification |
 | `paper_trading.py` | Simulates Jupiter swaps without on-chain execution |
@@ -387,7 +387,7 @@ Executes Jupiter swaps for qualified tokens, broadcasts to RPC, records position
 |-----------|------|-------------|
 | Input | Redis Sub | Channel: `trade_approved` |
 | Output | Redis Pub/Sub | Channel: `position_opened` |
-| Output | SQLite | `positions` table |
+| Output | PostgreSQL | `positions` table |
 
 ### Key Configuration
 
@@ -452,7 +452,7 @@ const txId = await connection.sendRawTransaction(versionedTx.serialize(), {
 // Step 7: Wait for confirmation
 const status = await connection.getSignatureStatus(txId);
 
-// Step 8: Record position in SQLite
+// Step 8: Record position in PostgreSQL
 insertPosition.run({
     position_id: correlationId,
     mint: mint,
@@ -668,7 +668,7 @@ async executeTrade(mint: string, correlationId: string): Promise<void> {
     // 7. Wait for confirmation
     const status = await connection.getSignatureStatus(txId);
     
-    // 8. Record position in SQLite
+    // 8. Record position in PostgreSQL
     insertPosition.run({...});
 }
 ```
@@ -958,60 +958,48 @@ The system uses standardized Agent IDs defined in `src/python/shared/constants.p
 
 # 6. Database Schema
 
-## 6.1 SQLite Tables
+## 6.1 PostgreSQL Tables (mtus_db)
 
-### positions (data/positions.db)
+### positions
 
 ```sql
 CREATE TABLE positions (
-    position_id TEXT PRIMARY KEY,           -- UUID v4
-    mint TEXT NOT NULL,                      -- Token mint address
-    token_name TEXT,                         -- Token name
-    token_symbol TEXT,                       -- Token symbol
-    entry_price_sol REAL,                   -- Entry price in SOL
-    entry_amount_sol REAL,                   -- Position size (default 0.0005 SOL)
-    tokens_received REAL,                    -- Tokens bought
-    entry_tx_signature TEXT,                 -- Transaction signature
-    entry_timestamp_utc TEXT,                -- ISO-8601 timestamp
-    state TEXT NOT NULL,                      -- PositionState enum
-    tp1_price REAL,                          -- 2x entry (take profit 1)
-    tp2_price REAL,                          -- 5x entry (take profit 2)
-    sl_price REAL,                           -- 0.7x entry (stop loss)
-    peak_price_sol REAL,                     -- Peak price for trailing
-    exit_price_sol REAL,                     -- Exit price
-    exit_tx_signature TEXT,                  -- Exit transaction
-    realised_pnl_sol REAL,                   -- Realized P&L
-    qualification_report TEXT,               -- JSON qualification report
-    created_at TEXT,                         -- Creation timestamp
-    updated_at TEXT                          -- Last update timestamp
+    position_id         TEXT PRIMARY KEY,
+    mint                TEXT NOT NULL,
+    token_name          TEXT DEFAULT '',
+    token_symbol        TEXT DEFAULT '',
+    entry_price_sol     DOUBLE PRECISION DEFAULT 0,
+    entry_amount_sol    DOUBLE PRECISION DEFAULT 0,
+    tokens_received     DOUBLE PRECISION DEFAULT 0,
+    entry_tx_signature  TEXT DEFAULT '',
+    entry_timestamp_utc TEXT DEFAULT '',
+    state               TEXT NOT NULL DEFAULT 'OPEN',
+    tp1_price           DOUBLE PRECISION DEFAULT 0,
+    tp2_price           DOUBLE PRECISION DEFAULT 0,
+    sl_price            DOUBLE PRECISION DEFAULT 0,
+    peak_price_sol      DOUBLE PRECISION DEFAULT 0,
+    exit_price_sol      DOUBLE PRECISION,
+    exit_tx_signature   TEXT,
+    realised_pnl_sol    DOUBLE PRECISION,
+    qualification_report TEXT,
+    created_at          TEXT DEFAULT '',
+    updated_at          TEXT DEFAULT ''
 );
+
+-- Index for fast open position queries (used on every monitoring tick)
+CREATE INDEX idx_positions_state ON positions(state);
 ```
 
 ### audit_ledger
 
 ```sql
 CREATE TABLE audit_ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    envelope_id TEXT,                        -- Message ID
-    agent_id TEXT,                           -- AGT-01 to AGT-10
-    event_type TEXT,                         -- Event type
-    payload TEXT,                            -- JSON payload
-    timestamp_utc TEXT                       -- ISO-8601
-);
-```
-
-### paper_positions
-
-```sql
-CREATE TABLE paper_positions (
-    position_id TEXT PRIMARY KEY,
-    mint TEXT NOT NULL,
-    entry_price_sol REAL,
-    exit_price_sol REAL,
-    realised_pnl_sol REAL,
-    entry_timestamp_utc TEXT,
-    exit_timestamp_utc TEXT,
-    state TEXT
+    id              SERIAL PRIMARY KEY,
+    envelope_id     TEXT DEFAULT '',
+    agent_id        TEXT DEFAULT '',
+    event_type      TEXT DEFAULT '',
+    payload         TEXT DEFAULT '',
+    timestamp_utc   TEXT DEFAULT ''
 );
 ```
 
@@ -1061,7 +1049,7 @@ sequenceDiagram
     participant Ares as AGT-05 Ares
     participant Jupiter as Jupiter API
     participant RPC as Helius/QuickNode
-    participant DB as SQLite
+    participant DB as PostgreSQL
     
     Anansi->>Redis: Publish mtus:channel:trade_approved
     Redis->>Ares: mtus:channel:trade_approved message
@@ -1089,7 +1077,7 @@ sequenceDiagram
     participant Ares as AGT-05 Ares
     participant Jupiter as Jupiter API
     participant RPC as Helius/QuickNode
-    participant DB as SQLite
+    participant DB as PostgreSQL
     
     Anansi->>Redis: Publish mtus:channel:trade_approved
     Redis->>Ares: mtus:channel:trade_approved message
@@ -1165,7 +1153,7 @@ sequenceDiagram
 | Environment variables | ✅ .env file (never committed) |
 | Rate limiting | ✅ Redis-based hourly/daily limits |
 | Kill switch | ✅ `/killswitch` via Telegram (OTP required) |
-| Audit trail | ✅ SQLite audit_ledger table |
+| Audit trail | ✅ PostgreSQL audit_ledger table |
 | Operational window | ✅ Configurable check (0-24 hours) |
 | Dashboard auth | ✅ Admin mode with OTP verification |
 | API secrets | ✅ Server-side only (Redis), not localStorage |
@@ -1261,7 +1249,7 @@ The MTUS Dashboard is built with **Next.js 16.2.4** (App Router), **React 19**, 
 - **Icons**: Lucide React 0.460.0
 - **Real-time**: WebSocket client (ws://localhost:3001)
 - **REST API**: Next.js API routes (fallback)
-- **Database**: better-sqlite3 (positions.db)
+- **Database**: PostgreSQL (with pg client pool)
 - **Cache**: ioredis (Redis client)
 - **PWA**: next-pwa 5.6.0
 

@@ -8,8 +8,8 @@ The MTUS is a multi-agent system built on an event-driven architecture using Red
 
 ## Architecture
 
-* **Event Bus:** Redis Pub/Sub
-* **Data Storage:** SQLite (`positions.db`)
+* **Event Bus:** Redis Pub/Sub (real-time inter-agent messages and Telegram notification broker)
+* **Data Storage:** PostgreSQL (`mtus_db`) with pool-backed persistence (SQLite positions.db remains for sandbox/test environments)
 * **Agents:** 11 distinct microservices spanning Python and TypeScript
 * **Dashboard:** Next.js 16 (React + TypeScript) with WebSocket bridge
 
@@ -22,7 +22,7 @@ The MTUS is a multi-agent system built on an event-driven architecture using Red
 5. **AGT-05: Ares (Trade Executor)** - Executes Jupiter swaps, broadcasts to RPC.
 6. **AGT-06: Sentinel (TP/SL Monitor)** - Monitors open positions, triggers TP/SL.
 7. **AGT-08: CassandraAgent (Sentiment)** - Fetches social sentiment scores.
-8. **AGT-09: LedgerAgent (Audit)** - Records trade events to SQLite.
+8. **AGT-09: LedgerAgent (Audit)** - Records trade events to PostgreSQL.
 9. **AGT-10: HeraclesAgent (Guardian)** - Health monitoring, kill switch.
 10. **AGT-11: DashboardBridge** - WebSocket server for the UI.
 

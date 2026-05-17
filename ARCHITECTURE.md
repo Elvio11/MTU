@@ -18,8 +18,8 @@
 
 ### Core Technologies
 - **Runtime**: Node.js 20 LTS (TypeScript agents) + Python 3.11+ (Python agents)
-- **Message Bus**: Redis 7.x for inter-agent communication
-- **Database**: SQLite for position storage
+- **Message Bus**: Redis 7.x for inter-agent communication and instant Telegram notification routing
+- **Database**: PostgreSQL (`mtus_db`) for high-concurrency position storage (SQLite remains as local sandbox fallback)
 - **Blockchain**: Solana Mainnet via Helius/QuickNode/Alchemy RPC
 
 ### Agent Architecture (10 Agents)
@@ -60,7 +60,7 @@ D:\Trader\                           # Project Root
 │   └── main.keystore                # Main wallet (cold storage)
 │
 ├── data/
-│   └── positions.db                 # SQLite database
+│   └── positions.db                 # Sandbox SQLite database (fallback only)
 │
 ├── redis/                           # Redis server (Windows)
 │   ├── redis-server.exe
@@ -107,7 +107,7 @@ D:\Trader\                           # Project Root
 │       │
 │       └── shared/
 │           ├── envelope.ts          # TypeScript envelope schema
-│           ├── db.ts                # SQLite connection (better-sqlite3)
+│           ├── db.ts                # PostgreSQL connection (node-postgres pool-backed)
 │           ├── keystore.ts          # Keypair loading
 │           ├── circuit-breaker.ts   # RPC circuit breaker
 │           ├── operational-window.ts # 21:00-06:00 IST check
@@ -175,7 +175,7 @@ D:\Trader\                           # Project Root
 | **Keystore** | `src/*/shared/keystore.ts|py` | Argon2id + XSalsa20-Poly1305 encryption |
 | **Telegram** | `src/python/shared/telegram_bot.py` | Admin commands (10 commands implemented) |
 | **Redis** | `src/python/shared/redis_client.py` | aioredis pub/sub |
-| **DB** | `src/typescript/shared/db.ts` | SQLite (better-sqlite3) |
+| **DB** | `src/typescript/shared/db.ts` | PostgreSQL pool-backed storage (`pg`) |
 | **Paper Trading** | `src/python/shared/paper_trading.py` | PaperTradingEngine class |
 | **RPC Health** | `src/python/shared/rpc_health.py` | Load balancer + circuit breaker |
 | **Notification** | `src/python/shared/notification_templates.py` | Telegram message templates |
@@ -184,53 +184,44 @@ D:\Trader\                           # Project Root
 
 ## Database Schema
 
-### SQLite Tables (data/positions.db)
+### PostgreSQL Tables (mtus_db)
 
 ```sql
--- Positions table (Section 5.2)
+-- Positions table (High-concurrency PostgreSQL backed)
 CREATE TABLE positions (
-    position_id TEXT PRIMARY KEY,           -- UUID v4
-    mint TEXT NOT NULL,                      -- Token mint address
-    token_name TEXT,                         -- Token name
-    token_symbol TEXT,                       -- Token symbol
-    entry_price_sol REAL,                    -- Entry price in SOL
-    entry_amount_sol REAL,                   -- Position size (default 0.15 SOL)
-    tokens_received REAL,                    -- Tokens bought
-    entry_tx_signature TEXT,                 -- Transaction signature
-    entry_timestamp_utc TEXT,                -- ISO-8601 timestamp
-    state TEXT NOT NULL,                      -- PositionState enum
-    tp1_price REAL,                           -- 2x entry (take profit 1)
-    tp2_price REAL,                           -- 5x entry (take profit 2)
-    sl_price REAL,                            -- 0.7x entry (stop loss)
-    peak_price_sol REAL,                      -- Peak price for trailing
-    exit_price_sol REAL,                      -- Exit price
-    exit_tx_signature TEXT,                  -- Exit transaction
-    realised_pnl_sol REAL,                   -- Realized P&L
-    qualification_report TEXT,                -- JSON qualification report
-    created_at TEXT,                          -- Creation timestamp
-    updated_at TEXT                           -- Last update timestamp
+    position_id         TEXT PRIMARY KEY,
+    mint                TEXT NOT NULL,
+    token_name          TEXT DEFAULT '',
+    token_symbol        TEXT DEFAULT '',
+    entry_price_sol     DOUBLE PRECISION DEFAULT 0,
+    entry_amount_sol    DOUBLE PRECISION DEFAULT 0,
+    tokens_received     DOUBLE PRECISION DEFAULT 0,
+    entry_tx_signature  TEXT DEFAULT '',
+    entry_timestamp_utc TEXT DEFAULT '',
+    state               TEXT NOT NULL DEFAULT 'OPEN',
+    tp1_price           DOUBLE PRECISION DEFAULT 0,
+    tp2_price           DOUBLE PRECISION DEFAULT 0,
+    sl_price            DOUBLE PRECISION DEFAULT 0,
+    peak_price_sol      DOUBLE PRECISION DEFAULT 0,
+    exit_price_sol      DOUBLE PRECISION,
+    exit_tx_signature   TEXT,
+    realised_pnl_sol    DOUBLE PRECISION,
+    qualification_report TEXT,
+    created_at          TEXT DEFAULT '',
+    updated_at          TEXT DEFAULT ''
 );
 
--- Audit Ledger (Section 5.1)
+-- Index for fast open position queries (used on every monitoring tick)
+CREATE INDEX idx_positions_state ON positions(state);
+
+-- Audit Ledger (Append-only)
 CREATE TABLE audit_ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    envelope_id TEXT,                         -- Message ID
-    agent_id TEXT,                           -- AGT-01 to AGT-10
-    event_type TEXT,                         -- Event type
-    payload TEXT,                            -- JSON payload
-    timestamp_utc TEXT                       -- ISO-8601
-);
-
--- Paper Positions (Section 8.4)
-CREATE TABLE paper_positions (
-    position_id TEXT PRIMARY KEY,
-    mint TEXT NOT NULL,
-    entry_price_sol REAL,
-    exit_price_sol REAL,
-    realised_pnl_sol REAL,
-    entry_timestamp_utc TEXT,
-    exit_timestamp_utc TEXT,
-    state TEXT
+    id              SERIAL PRIMARY KEY,
+    envelope_id     TEXT DEFAULT '',
+    agent_id        TEXT DEFAULT '',
+    event_type      TEXT DEFAULT '',
+    payload         TEXT DEFAULT '',
+    timestamp_utc   TEXT DEFAULT ''
 );
 ```
 
