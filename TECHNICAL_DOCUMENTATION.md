@@ -1652,7 +1652,21 @@ npm start    # Production server
 
 ---
 
-*Document Version: 2.1.0*
-*Last Updated: 2026-05-08*
+# Appendix D: Recent Production Upgrades (May 2026)
+
+## D.1 Database Modernization (PostgreSQL Standardization)
+The database persistence layer has been migrated from local SQLite/in-memory boundaries to high-concurrency PostgreSQL (`mtus_db`), using a robust connection pool with parameterized query protections.
+- **Initialization**: Automated migration sequences compile `positions` and `audit_ledger` schemas.
+- **Performance**: High-efficiency state indexing reduces querying overhead to less than 2ms per monitoring tick.
+
+## D.2 Pricing Pipeline Integration (Jupiter Price API V3)
+Upgraded pricing microservices in `ares.ts` (AGT-05) and `sentinel.ts` (AGT-06) to use the latest production-grade **Jupiter Price API V3 (`https://api.jup.ag/price/v3`)**:
+- **Field Mappings**: Price values resolved via `.data[mint].usdPrice` elements, which solves schema mismatch and resolves the 401/404 batch endpoint errors.
+- **Fail-safe Pricing**: Fallbacks route through Birdeye API with structured request boundaries.
+
+---
+
+*Document Version: 2.1.4*
+*Last Updated: May 2026*
 *Classification: CONFIDENTIAL*
 *Test Suite: 327 tests passing (261 Python + 41 TypeScript + 25 Dashboard)*

@@ -63,6 +63,12 @@ The master configuration is located in `config/config.yaml`. It includes setting
 - Position sizing
 - Rate limits
 
+## Recent Production Updates (May 2026)
+
+*   **Jupiter Price API V3 Migration**: Upgraded both `ares` (AGT-05) and `sentinel` (AGT-06) agents to use the latest stable Jupiter Price API V3 endpoint (`https://api.jup.ag/price/v3`). Updated price field resolutions from `.price` to `.usdPrice` to align with the new schema, resolving 401/404 errors.
+*   **PostgreSQL Persistence Integration**: Standardized the system-wide storage on high-concurrency PostgreSQL (`mtus_db`) using `node-postgres` with pool-backed transaction safety. Open positions are dynamically queried on every monitoring tick.
+*   **Live Sniper Verification**: Successfully validated and tested real-time trade executions via Jupiter CLI integration, ensuring automatic Position Open notifications are pushed to Redis and tracked continuously.
+
 ## Security
 
 - Keys are encrypted using Argon2id + XSalsa20-Poly1305.

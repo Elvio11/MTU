@@ -78,7 +78,7 @@ export async function fetchTokenPrice(mint: string): Promise<number> {
       signal: AbortSignal.timeout(5000) 
     });
     const data: any = await resp.json();
-    return data?.data?.[mint]?.price || 0;
+    return data?.data?.[mint]?.usdPrice || 0;
   } catch (e) {
     return 0;
   }
@@ -207,7 +207,7 @@ export async function getSolPriceUsd(config?: any): Promise<number> {
           headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
           timeout: 5000 
         });
-        const price = response.data?.[SOL_MINT]?.usdPrice || response.data?.data?.[SOL_MINT]?.price;
+        const price = response.data?.data?.[SOL_MINT]?.usdPrice || response.data?.data?.[SOL_MINT]?.price;
         if (price && typeof price === 'number' && price > 0) {
           lastKnownSolPrice = price;
           return price;

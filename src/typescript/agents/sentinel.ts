@@ -125,15 +125,15 @@ export class SentinelAgent {
       
       const mintsParam = mints.join(',');
       const tokenUsdMap = await rateLimitedRequest(async () => {
-        // v2 price API is the stable batch endpoint
-        const resp = await axios.get(`https://api.jup.ag/price/v2?ids=${mintsParam}`, { 
+        // v3 price API is the stable batch endpoint
+        const resp = await axios.get(`https://api.jup.ag/price/v3?ids=${mintsParam}`, { 
           headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
           timeout: 5000 
         });
         const data = resp.data;
         const result: Record<string, number> = {};
         for (const mint of mints) {
-          result[mint] = parseFloat(data?.data?.[mint]?.price || "0");
+          result[mint] = Number(data?.data?.[mint]?.usdPrice || 0);
         }
         return result;
       }, this.config);

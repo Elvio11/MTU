@@ -447,6 +447,20 @@ python -m src.python.agents.nofx  # Start NOFX
 
 ---
 
-*Last Updated: 2026-05-05*
-*Version: 1.0.0*
+## Production Enhancements & Updates (May 2026)
+
+### 1. Database Persistence Standard
+*   **Primary Backend**: Migrated from SQLite sandbox memory-only boundaries to high-concurrency **PostgreSQL (`mtus_db`)**.
+*   **Driver**: Powered by the highly robust, pool-backed `node-postgres` (`pg`) module in TypeScript and `psycopg2` / `SQLAlchemy` integrations in Python.
+*   **Schema Safety**: Schema initialization automatically provisions `positions` and `audit_ledger` tables, featuring performance indices on position states for rapid active queries.
+
+### 2. Pricing Pipeline Integration (Jupiter API V3)
+*   **Batch Queries**: Upgraded pricing polls in `sentinel.ts` (AGT-06) and `ares.ts` (AGT-05) to interface with the stable **Jupiter Price API V3 (`https://api.jup.ag/price/v3`)**.
+*   **Schema Alignment**: Mapped field resolution to target the updated nested structure (`.data[mint].usdPrice`), which reliably handles both individual token lookups and multi-position batches.
+*   **Operational Security**: Enhanced Birdeye API pricing fallbacks as secondary redundancy layer under strict HTTP rate limit parameters.
+
+---
+
+*Last Updated: May 2026*
+*Version: 1.0.4*
 *Classification: CONFIDENTIAL*
