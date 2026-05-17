@@ -76,7 +76,7 @@ class TestRedisDowntime:
         from src.python.agents.nofx import NofxAgent
         from src.python.shared.envelope import AgentMessageEnvelope
 
-        agent = NofxAgent()
+        agent = NofxAgent({"system": {"environment": "paper"}})
         agent.redis = None  # Simulate Redis down
 
         # Creating envelope should still work (doesn't need Redis)

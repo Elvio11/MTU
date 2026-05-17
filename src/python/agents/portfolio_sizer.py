@@ -3,9 +3,13 @@ import aioredis
 import json
 import os
 import sys
-import sqlite3
 import yaml
 from typing import Dict
+from dotenv import load_dotenv
+
+load_dotenv("./.env")
+
+from src.python.shared.db import get_connection
 from src.python.shared.envelope import AgentMessageEnvelope
 from src.python.shared.constants import (
     CHANNEL_POSITION_CLOSED,
@@ -33,10 +37,6 @@ class PortfolioSizerAgent:
         self.max_size = trading_cfg.get("max_position_size_sol", 0.01)
         self.compounding_pct = trading_cfg.get("compounding_pct", 0.1) 
         self.growth_enabled = trading_cfg.get("dynamic_growth_enabled", False)
-        
-        # DB Path
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        self.db_path = os.path.join(project_root, "data", "positions.db")
 
     async def connect_redis(self):
         self.redis = await aioredis.from_url(
@@ -48,15 +48,15 @@ class PortfolioSizerAgent:
         print(f"AGT-12: PortfolioSizerAgent subscribed to {CHANNEL_POSITION_CLOSED}")
 
     def calculate_new_size(self):
-        """Query SQLite for cumulative realized PnL and apply growth formula."""
+        """Query PostgreSQL for cumulative realized PnL and apply growth formula."""
         try:
-            if not os.path.exists(self.db_path):
-                return self.base_size
-
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT SUM(realised_pnl_sol) FROM positions WHERE state = 'CLOSED'")
-            total_pnl = cursor.fetchone()[0] or 0.0
+            conn = get_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT SUM(realised_pnl_sol) FROM positions WHERE state = 'CLOSED'"
+                )
+                row = cur.fetchone()
+                total_pnl = (row["sum"] if row and row["sum"] is not None else 0.0)
             conn.close()
 
             if not self.growth_enabled:
@@ -95,8 +95,6 @@ class PortfolioSizerAgent:
 
         while self.running:
             try:
-                # check operational window to reduce activity if needed
-                # Sizer should always be ready to catch events, but we can sleep longer in loop
                 active = is_operational_window_active()
                 
                 message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -105,7 +103,6 @@ class PortfolioSizerAgent:
                     print("AGT-12: Position closure detected, recalculating sizing...")
                     await self.update_redis_config()
                 
-                # If window is closed, we still listen but can have a longer interval between checks
                 await asyncio.sleep(0.1 if active else 5.0)
                 
             except Exception as e:

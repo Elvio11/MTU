@@ -1,47 +1,45 @@
-import sqlite3
-import aioredis
-import asyncio
+"""
+clear_active_positions.py — Emergency maintenance script.
+Closes all OPEN positions in PostgreSQL and clears the Redis active-positions set.
+"""
+import sys
 import os
+import asyncio
 
-async def clear_positions():
-    # 1. Clear SQLite
-    db_path = "data/positions.db"
-    if os.path.exists(db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE positions SET state = 'CLOSED' WHERE state != 'CLOSED'")
-        count = cursor.rowcount
+# Allow running from project root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+
+from dotenv import load_dotenv
+load_dotenv("./.env")
+
+from src.python.shared.db import get_connection
+
+async def main():
+    import aioredis
+
+    # 1. Close all OPEN positions in PostgreSQL
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE positions SET state = 'CLOSED', updated_at = NOW()::TEXT WHERE state = 'OPEN'"
+            )
+            count = cur.rowcount
         conn.commit()
         conn.close()
-        print(f"SQLite: Updated {count} positions to CLOSED.")
-    else:
-        print("SQLite: DB not found at data/positions.db")
+        print(f"PostgreSQL: Updated {count} positions to CLOSED.")
+    except Exception as e:
+        print(f"PostgreSQL: Error: {e}")
 
-    # 2. Clear Redis
+    # 2. Clear Redis active-positions set
     try:
         redis = await aioredis.from_url("redis://localhost:6379", decode_responses=True)
-        
-        # Clear active positions set
         await redis.delete("mtus:active_positions")
-        print("Redis: Cleared mtus:active_positions set.")
-        
-        # Clear position keys
-        keys = await redis.keys("mtus:position:*")
-        if keys:
-            for key in keys:
-                await redis.delete(key)
-            print(f"Redis: Deleted {len(keys)} position keys.")
-            
-        # Clear dedup keys to allow re-trading if needed
-        dedup_keys = await redis.keys("mtus:dedup:*")
-        if dedup_keys:
-            for key in dedup_keys:
-                await redis.delete(key)
-            print(f"Redis: Deleted {len(dedup_keys)} dedup keys.")
-
         await redis.close()
+        print("Redis: Cleared mtus:active_positions set.")
     except Exception as e:
-        print(f"Redis: Error clearing keys: {e}")
+        print(f"Redis: Error: {e}")
+
 
 if __name__ == "__main__":
-    asyncio.run(clear_positions())
+    asyncio.run(main())

@@ -281,9 +281,12 @@ class HydraAgent:
                 # or add a targeted fetch if needed.
 
                 # 3. Fetch Trending as fallback AND for early 5% tokens
-                trending = await self.fetch_trending_pumpfun()
-                for token in trending:
-                    await self.process_token(token)
+                if len(high_value) < 10:
+                    trending = await self.fetch_trending_pumpfun()
+                    for token in trending:
+                        await self.process_token(token)
+                else:
+                    trending = []
 
                 total_scanned = len(high_value) + len(trending)
                 if total_scanned > 0:

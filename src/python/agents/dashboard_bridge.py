@@ -5,8 +5,12 @@ import os
 import sys
 import websockets
 import yaml
-import sqlite3
 from typing import Dict, Any, Set
+from dotenv import load_dotenv
+
+load_dotenv("./.env")
+
+from src.python.shared.db import get_connection
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
@@ -34,10 +38,35 @@ class DashboardBridge:
         self.pubsub = None
         self.running = False
         self.api_manager = GlobalApiManager()
-        
-        # Determine database path
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        self.db_path = os.path.join(project_root, "data", "positions.db")
+
+    def _get_db_metrics(self) -> dict:
+        """Query PostgreSQL for system metrics to broadcast to the UI."""
+        try:
+            conn = get_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT SUM(realised_pnl_sol) FROM positions")
+                row = cur.fetchone()
+                total_pnl = row["sum"] if row and row["sum"] is not None else 0.0
+
+                cur.execute("SELECT COUNT(*) FROM positions WHERE state = 'OPEN'")
+                open_count = cur.fetchone()["count"] or 0
+
+                cur.execute("SELECT COUNT(*) FROM positions WHERE realised_pnl_sol > 0")
+                wins = cur.fetchone()["count"] or 0
+
+                cur.execute("SELECT COUNT(*) FROM positions WHERE state = 'CLOSED'")
+                closed = cur.fetchone()["count"] or 1
+
+            conn.close()
+            win_rate = (wins / max(1, closed)) * 100
+            return {
+                "total_pnl": round(total_pnl, 4),
+                "open_positions": open_count,
+                "win_rate": round(win_rate, 2),
+            }
+        except Exception as e:
+            print(f"AGT-11: DB metrics error: {e}")
+            return {}
 
     async def handler(self, ws, path=None):
         """Handle WebSocket client connections"""
@@ -76,7 +105,6 @@ class DashboardBridge:
                     try:
                         channel = message["channel"]
                         data = json.loads(message["data"])
-                        # Broadcast to all WebSocket clients
                         disconnected = set()
                         for client in self.clients:
                             try:
@@ -105,38 +133,9 @@ class DashboardBridge:
                     await asyncio.sleep(5)
                     continue
 
-                # Get API stats
                 api_stats = self.api_manager.get_stats()
+                db_metrics = self._get_db_metrics()
 
-                # Get DB metrics
-                db_metrics = {}
-                if os.path.exists(self.db_path):
-                    try:
-                        conn = sqlite3.connect(self.db_path)
-                        cursor = conn.cursor()
-                        
-                        cursor.execute("SELECT SUM(realised_pnl_sol) FROM positions")
-                        total_pnl = cursor.fetchone()[0] or 0.0
-                        
-                        cursor.execute("SELECT COUNT(*) FROM positions WHERE state = 'OPEN'")
-                        open_count = cursor.fetchone()[0] or 0
-                        
-                        cursor.execute("SELECT COUNT(*) FROM positions WHERE realised_pnl_sol > 0")
-                        wins = cursor.fetchone()[0] or 0
-                        cursor.execute("SELECT COUNT(*) FROM positions WHERE state = 'CLOSED'")
-                        closed = cursor.fetchone()[0] or 1
-                        win_rate = (wins / max(1, closed)) * 100
-                        
-                        db_metrics = {
-                            "total_pnl": round(total_pnl, 4),
-                            "open_positions": open_count,
-                            "win_rate": round(win_rate, 2)
-                        }
-                        conn.close()
-                    except Exception as e:
-                        print(f"AGT-11: DB metrics error: {e}")
-
-                # Get dynamic position size
                 current_size = 0.0
                 try:
                     size_val = await self.redis.get(KEY_POSITION_SIZE_SOL)
@@ -151,13 +150,12 @@ class DashboardBridge:
                         "api": api_stats,
                         "metrics": {
                             **db_metrics,
-                            "current_position_size": current_size
+                            "current_position_size": current_size,
                         },
-                        "timestamp": os.getpid() # Just a marker
-                    }
+                        "timestamp": os.getpid(),
+                    },
                 }
 
-                # Broadcast
                 disconnected = set()
                 for client in self.clients:
                     try:
@@ -177,10 +175,8 @@ class DashboardBridge:
         print(f"AGT-11: Starting Dashboard Bridge on port {self.ws_port}")
         self.running = True
 
-        # Start WebSocket server
         async with websockets.serve(self.handler, "0.0.0.0", self.ws_port):
             print(f"AGT-11: WebSocket server started on ws://0.0.0.0:{self.ws_port}")
-            # Start Redis listener and stats broadcaster
             await asyncio.gather(
                 self.forward_redis_messages(),
                 self.broadcast_system_stats()

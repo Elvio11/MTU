@@ -183,7 +183,7 @@ describe('SentinelAgent Rigorous Coverage', () => {
         });
         
         await agent.monitorPositions();
-        expect(agent.sellPortion).toHaveBeenCalledWith(expect.objectContaining({ position_id: 'tp1' }), 0.5, 'tp1_hit');
+        expect(agent.sellPortion).toHaveBeenCalledWith(expect.objectContaining({ position_id: 'tp1' }), 1.0, 'tp1_hit');
 
         // SL: Price 0.0004 (0.4x)
         fetchPricesSpy.mockResolvedValue({

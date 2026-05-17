@@ -676,7 +676,7 @@ async def test_oracle_handle_token_received_no_birdeye(oracle):
     oracle.perform_ta_analysis = AsyncMock(
         return_value={"signal": "neutral", "rsi": None, "volume_trend": 1.0}
     )
-    envelope = _make_envelope(payload={"mint": VALID_MINT, "symbol": "TKN"})
+    envelope = _make_envelope(payload={"mint": VALID_MINT, "symbol": "TKN", "is_graduated": True})
     await oracle.handle_token_received(envelope.model_dump_json())
     oracle.redis.publish.assert_awaited()
 

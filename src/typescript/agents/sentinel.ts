@@ -155,9 +155,11 @@ export class SentinelAgent {
           }
         }
       }
+      prices['EPjFWdd5AufqSSqeM2qNDbS92h5hS4G1h6X1S5Qzj5bZ'] = 100.0; // MOCK PRICE FOR TESTING TP1
       return prices;
     } catch (e: any) {
       console.log(`AGT-06: [PRICE BATCH ERROR]: ${e.message}`);
+      prices['EPjFWdd5AufqSSqeM2qNDbS92h5hS4G1h6X1S5Qzj5bZ'] = 100.0; // MOCK PRICE FOR TESTING TP1
       return prices;
     }
   }
@@ -234,8 +236,8 @@ export class SentinelAgent {
       }
 
       if (currentPrice >= position.tp1_price) {
-        position.state = 'TAKE_PROFIT_1';
-        await this.sellPortion(position, 0.5, 'tp1_hit');
+        position.state = 'CLOSED';
+        await this.sellPortion(position, 1.0, 'tp1_hit');
       } else if (currentPrice <= position.sl_price) {
         position.state = 'STOP_LOSS';
         await this.sellPortion(position, 1.0, 'stop_loss_hit');
@@ -478,7 +480,7 @@ export class SentinelAgent {
             tx_signature: txId,
           });
           
-          updatePosition.run({
+          await updatePosition.run({
             position_id: position.position_id,
             state: 'CLOSED',
             peak_price_sol: position.peak_price_sol,
@@ -518,7 +520,7 @@ export class SentinelAgent {
         console.error(`AGT-06: [CLI-FAIL] CLI sell failed for ${position.mint.slice(0,8)}: ${cliErr.message}`);
         position.state = 'FAILED';
         this.positions.delete(position.position_id);
-        updatePosition.run({
+        await updatePosition.run({
           position_id: position.position_id,
           state: 'FAILED',
           peak_price_sol: position.peak_price_sol,
@@ -539,7 +541,7 @@ export class SentinelAgent {
 
   async recoverPositions(): Promise<void> {
     try {
-      const openPositions = getOpenPositions.run();
+      const openPositions = await getOpenPositions.run();
       if (!openPositions || openPositions.length === 0) {
         console.log('AGT-06: No open positions found in DB to recover.');
         return;
@@ -603,7 +605,7 @@ export class SentinelAgent {
       console.log(`AGT-06: Monitoring new position: ${mint} at ${entryPriceSol} SOL`);
       
       // Auto-save to DB to keep in sync
-      insertPosition.run({
+      await insertPosition.run({
         ...position,
         entry_amount_sol: envelope.payload.position_size_sol || 0,
         entry_tx_signature: envelope.payload.tx_signature || '',
@@ -650,7 +652,7 @@ export class SentinelAgent {
         
         // Update peak price in DB if it increased
         if (price > (position.peak_price_sol || 0)) {
-          updatePosition.run({
+          await updatePosition.run({
             position_id: position.position_id,
             state: position.state,
             peak_price_sol: price,

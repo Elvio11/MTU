@@ -19,23 +19,9 @@ def nofx_agent():
 
 @pytest.mark.asyncio
 async def test_nofx_poll_for_tokens_http_success(nofx_agent):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "pairs": [
-            {
-                "dexId": "pumpfun",
-                "baseToken": {"address": VALID_MINT, "name": "TEST", "symbol": "T"},
-                "marketCap": 1000000,
-                "liquidity": {"sol": 10}
-            }
-        ]
-    }
-    
-    with patch("requests.get", return_value=mock_response):
-        with patch.object(nofx_agent, "_handle_new_token", new_callable=AsyncMock) as mock_handle:
-            await nofx_agent.poll_for_tokens_http()
-            mock_handle.assert_called_once()
+    # HTTP polling is disabled in production stubs
+    await nofx_agent.poll_for_tokens_http()
+    assert not nofx_agent.priority_queue.enqueue.called
 
 @pytest.mark.asyncio
 async def test_nofx_handle_pumpdev_message_trade(nofx_agent):

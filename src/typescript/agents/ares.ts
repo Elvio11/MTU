@@ -339,8 +339,8 @@ export class AresAgent {
 
   private async syncState(): Promise<void> {
     try {
-      console.log('AGT-05: [SYNC] Synchronizing Redis state with SQLite DB...');
-      const openPositions = getOpenPositions.run();
+      console.log('AGT-05: [SYNC] Synchronizing Redis state with PostgreSQL DB...');
+      const openPositions = await getOpenPositions.run();
       const positionsKey = 'mtus:active_positions';
       
       // Clear current Redis set to ensure fresh sync
@@ -486,7 +486,7 @@ export class AresAgent {
             entry_timestamp_utc: new Date().toISOString(),
           };
 
-          insertPosition.run(position);
+          await insertPosition.run(position);
           
           const envelope = createEnvelope('AGT-05', 'position_opened', {
             ...position,

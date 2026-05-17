@@ -141,7 +141,7 @@ class TestRedisDowntime:
         """Agent should not crash when Redis is down"""
         from src.python.agents.nofx import NofxAgent
 
-        agent = NofxAgent()
+        agent = NofxAgent({"system": {"environment": "paper"}})
         # Don't call connect_redis - simulate Redis being down
         agent.redis = None
 

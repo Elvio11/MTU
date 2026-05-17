@@ -11,6 +11,62 @@ import pytest
 import runpy
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
+class SqlitePostgresAdapter:
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def cursor(self):
+        class CursorWrapper:
+            def __init__(self, cur):
+                self.cur = cur
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.cur.close()
+            def execute(self, query, params=None):
+                if params:
+                    query = query.replace("%s", "?")
+                self.cur.execute(query, params or ())
+            @property
+            def rowcount(self):
+                return self.cur.rowcount
+            def fetchone(self):
+                res = self.cur.fetchone()
+                if res is None:
+                    return None
+                class RowWrapper(dict):
+                    def __getitem__(self, key):
+                        if isinstance(key, int):
+                            return list(self.values())[key]
+                        return super().__getitem__(key)
+                cols = []
+                for desc in self.cur.description:
+                    col_name = desc[0].lower()
+                    if "sum(" in col_name:
+                        cols.append("sum")
+                    else:
+                        cols.append(col_name)
+                return RowWrapper(dict(zip(cols, res)))
+            def fetchall(self):
+                res = self.cur.fetchall()
+                if res is None:
+                    return []
+                cols = [desc[0].lower() for desc in self.cur.description]
+                return [dict(zip(cols, row)) for row in res]
+        return CursorWrapper(self.conn.cursor())
+    
+    def execute(self, query, params=None):
+        if params:
+            query = query.replace("%s", "?")
+        return self.conn.execute(query, params or ())
+
+    def commit(self):
+        self.conn.commit()
+    def rollback(self):
+        self.conn.rollback()
+    def close(self):
+        self.conn.close()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HermesAgent tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,15 +235,16 @@ from src.python.agents.ledger import LedgerAgent
 def ledger(tmp_path):
     agent = LedgerAgent()
     db_path = str(tmp_path / "positions.db")
-    agent.db = sqlite3.connect(db_path)
-    agent.db.execute("""
+    raw_db = sqlite3.connect(db_path)
+    agent.db = SqlitePostgresAdapter(raw_db)
+    raw_db.execute("""
         CREATE TABLE IF NOT EXISTS audit_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             envelope_id TEXT, agent_id TEXT, event_type TEXT,
             payload TEXT, timestamp_utc TEXT
         )
     """)
-    agent.db.commit()
+    raw_db.commit()
     agent.audit_file = MagicMock()
     agent.redis = AsyncMock()
     agent.pubsub = AsyncMock()
@@ -197,7 +254,7 @@ def ledger(tmp_path):
 
 def test_ledger_connect_db(tmp_path):
     agent = LedgerAgent()
-    with patch("src.python.agents.ledger.sqlite3.connect") as mock_conn:
+    with patch("src.python.agents.ledger.get_connection") as mock_conn:
         mock_conn.return_value = MagicMock()
         agent.connect_db()
         mock_conn.assert_called_once()

@@ -5,6 +5,63 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from src.python.agents.portfolio_sizer import PortfolioSizerAgent, main
 
+class SqlitePostgresAdapter:
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def cursor(self):
+        class CursorWrapper:
+            def __init__(self, cur):
+                self.cur = cur
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.cur.close()
+            def execute(self, query, params=None):
+                if params:
+                    query = query.replace("%s", "?")
+                self.cur.execute(query, params or ())
+            @property
+            def rowcount(self):
+                return self.cur.rowcount
+            def fetchone(self):
+                res = self.cur.fetchone()
+                if res is None:
+                    return None
+                class RowWrapper(dict):
+                    def __getitem__(self, key):
+                        if isinstance(key, int):
+                            return list(self.values())[key]
+                        return super().__getitem__(key)
+                cols = []
+                for desc in self.cur.description:
+                    col_name = desc[0].lower()
+                    if "sum(" in col_name:
+                        cols.append("sum")
+                    else:
+                        cols.append(col_name)
+                return RowWrapper(dict(zip(cols, res)))
+            def fetchall(self):
+                res = self.cur.fetchall()
+                if res is None:
+                    return []
+                cols = [desc[0].lower() for desc in self.cur.description]
+                return [dict(zip(cols, row)) for row in res]
+        return CursorWrapper(self.conn.cursor())
+    
+    def commit(self):
+        self.conn.commit()
+    def rollback(self):
+        self.conn.rollback()
+    def close(self):
+        self.conn.close()
+
+@pytest.fixture(autouse=True)
+def mock_db_connection(portfolio_agent):
+    def mock_get_conn():
+        return SqlitePostgresAdapter(sqlite3.connect(portfolio_agent.db_path))
+    with patch("src.python.agents.portfolio_sizer.get_connection", side_effect=mock_get_conn):
+        yield
 
 @pytest.fixture
 def portfolio_agent(tmp_path):

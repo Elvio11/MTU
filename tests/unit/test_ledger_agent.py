@@ -10,6 +10,62 @@ from datetime import datetime, timedelta
 from src.python.agents.ledger import LedgerAgent, main as ledger_main
 from src.python.shared.constants import EVENT_TOKEN_DETECTED
 
+class SqlitePostgresAdapter:
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def cursor(self):
+        class CursorWrapper:
+            def __init__(self, cur):
+                self.cur = cur
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.cur.close()
+            def execute(self, query, params=None):
+                if params:
+                    query = query.replace("%s", "?")
+                self.cur.execute(query, params or ())
+            @property
+            def rowcount(self):
+                return self.cur.rowcount
+            def fetchone(self):
+                res = self.cur.fetchone()
+                if res is None:
+                    return None
+                class RowWrapper(dict):
+                    def __getitem__(self, key):
+                        if isinstance(key, int):
+                            return list(self.values())[key]
+                        return super().__getitem__(key)
+                cols = []
+                for desc in self.cur.description:
+                    col_name = desc[0].lower()
+                    if "sum(" in col_name:
+                        cols.append("sum")
+                    else:
+                        cols.append(col_name)
+                return RowWrapper(dict(zip(cols, res)))
+            def fetchall(self):
+                res = self.cur.fetchall()
+                if res is None:
+                    return []
+                cols = [desc[0].lower() for desc in self.cur.description]
+                return [dict(zip(cols, row)) for row in res]
+        return CursorWrapper(self.conn.cursor())
+    
+    def execute(self, query, params=None):
+        if params:
+            query = query.replace("%s", "?")
+        return self.conn.execute(query, params or ())
+
+    def commit(self):
+        self.conn.commit()
+    def rollback(self):
+        self.conn.rollback()
+    def close(self):
+        self.conn.close()
+
 CONFIG = {
     "system": {
         "environment": "paper"
@@ -24,8 +80,9 @@ CONFIG = {
 def ledger_agent():
     # Use in-memory for testing
     agent = LedgerAgent(CONFIG)
-    agent.db = sqlite3.connect(":memory:")
-    agent.db.execute("""
+    raw_db = sqlite3.connect(":memory:")
+    agent.db = SqlitePostgresAdapter(raw_db)
+    raw_db.execute("""
         CREATE TABLE IF NOT EXISTS audit_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             envelope_id TEXT,
@@ -36,8 +93,8 @@ def ledger_agent():
         )
     """)
     # Add positions for cleanup test
-    agent.db.execute("CREATE TABLE IF NOT EXISTS positions (position_id TEXT)")
-    agent.db.commit()
+    raw_db.execute("CREATE TABLE IF NOT EXISTS positions (position_id TEXT)")
+    raw_db.commit()
     agent.audit_file = MagicMock()
     agent.redis = AsyncMock()
     agent.pubsub = AsyncMock()
@@ -45,7 +102,7 @@ def ledger_agent():
 
 @pytest.mark.asyncio
 async def test_ledger_connect_db(ledger_agent):
-    with patch("src.python.agents.ledger.sqlite3.connect", return_value=MagicMock()) as mock_conn:
+    with patch("src.python.agents.ledger.get_connection", return_value=MagicMock()) as mock_conn:
         ledger_agent.connect_db()
         assert mock_conn.called
 

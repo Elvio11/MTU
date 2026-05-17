@@ -104,10 +104,10 @@ async def test_check_g8_social_metadata(agent):
 
 @pytest.mark.asyncio
 async def test_check_g9_duplicate(agent):
-    agent.redis.exists.return_value = False
+    agent.redis.get = AsyncMock(return_value=None)
     assert await agent.check_g9_duplicate("mint1") is True
     
-    agent.redis.exists.return_value = True
+    agent.redis.get = AsyncMock(return_value="approved")
     assert await agent.check_g9_duplicate("mint1") is False
 
 @pytest.mark.asyncio

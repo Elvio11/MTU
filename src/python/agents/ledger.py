@@ -2,7 +2,6 @@ import asyncio
 import aioredis
 import json
 import time
-import sqlite3
 import os
 import sys
 import yaml
@@ -13,6 +12,7 @@ from dotenv import load_dotenv
 # Load .env file
 load_dotenv("./.env")
 
+from src.python.shared.db import get_connection
 from src.python.shared.envelope import AgentMessageEnvelope, EventType
 from src.python.shared.config_validator import validate_config
 from src.python.shared.safe_output import safe_print as print
@@ -46,20 +46,22 @@ class LedgerAgent:
         self.audit_file = None
 
     def connect_db(self):
-        """Connect to SQLite and create audit ledger table per Section 5.1"""
-        self.db = sqlite3.connect("data/positions.db")
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS audit_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                envelope_id TEXT,
-                agent_id TEXT,
-                event_type TEXT,
-                payload TEXT,
-                timestamp_utc TEXT
-            )
-        """)
+        """Connect to PostgreSQL and create audit ledger table."""
+        self.db = get_connection()
+        self.db.autocommit = False
+        with self.db.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS audit_ledger (
+                    id              SERIAL PRIMARY KEY,
+                    envelope_id     TEXT DEFAULT '',
+                    agent_id        TEXT DEFAULT '',
+                    event_type      TEXT DEFAULT '',
+                    payload         TEXT DEFAULT '',
+                    timestamp_utc   TEXT DEFAULT ''
+                )
+            """)
         self.db.commit()
-        print("AGT-09: Connected to audit ledger DB")
+        print("AGT-09: Connected to PostgreSQL audit ledger DB")
 
     async def connect_redis(self):
         """Subscribe to all trade events per Section 3.9"""
@@ -87,18 +89,18 @@ class LedgerAgent:
         print(f"AGT-09: Subscribed to {len(channels)} event channels")
 
     def write_audit_log(self, envelope: AgentMessageEnvelope):
-        """Write to append-only SQLite and JSON ledger per Section 5.1"""
-        # SQLite write
-        self.db.execute(
-            "INSERT INTO audit_ledger (envelope_id, agent_id, event_type, payload, timestamp_utc) VALUES (?, ?, ?, ?, ?)",
-            (
-                envelope.envelope_id,
-                envelope.agent_id,
-                envelope.event_type,
-                json.dumps(envelope.payload),
-                envelope.timestamp_utc,
-            ),
-        )
+        """Write to append-only PostgreSQL and JSON ledger."""
+        with self.db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO audit_ledger (envelope_id, agent_id, event_type, payload, timestamp_utc) VALUES (%s, %s, %s, %s, %s)",
+                (
+                    envelope.envelope_id,
+                    envelope.agent_id,
+                    envelope.event_type,
+                    json.dumps(envelope.payload),
+                    envelope.timestamp_utc,
+                ),
+            )
         self.db.commit()
 
         # Append-only JSON file
@@ -114,22 +116,27 @@ class LedgerAgent:
             print(f"AGT-09: Error handling event: {e}")
 
     def rotate_audit_logs(self):
-        """Delete audit logs and JSON entries older than 30 days per Section 5.1"""
+        """Delete audit logs older than 30 days and clean stale positions."""
         try:
             cutoff = (datetime.now() - timedelta(days=30)).isoformat()
-            cursor = self.db.execute("DELETE FROM audit_ledger WHERE timestamp_utc < ?", (cutoff,))
-            deleted = cursor.rowcount
+            with self.db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM audit_ledger WHERE timestamp_utc < %s", (cutoff,)
+                )
+                deleted = cur.rowcount
+                if deleted > 0:
+                    print(f"AGT-09: [ROTATION] Deleted {deleted} old audit log entries")
+
+                # Stale position cleanup
+                cur.execute(
+                    "DELETE FROM positions WHERE position_id IN (%s, %s)",
+                    ("pos_2", "pos_3"),
+                )
+                deleted_stale = cur.rowcount
+                if deleted_stale > 0:
+                    print(f"AGT-09: [CLEANUP] Deleted {deleted_stale} stale position entries")
+
             self.db.commit()
-            if deleted > 0:
-                print(f"AGT-09: [ROTATION] Deleted {deleted} old audit log entries")
-            
-            # Stale position cleanup (pos_2, pos_3)
-            cursor = self.db.execute("DELETE FROM positions WHERE position_id IN ('pos_2', 'pos_3')")
-            deleted_stale = cursor.rowcount
-            self.db.commit()
-            if deleted_stale > 0:
-                print(f"AGT-09: [CLEANUP] Deleted {deleted_stale} stale position entries")
-                
         except Exception as e:
             print(f"AGT-09: Error during rotation/cleanup: {e}")
 

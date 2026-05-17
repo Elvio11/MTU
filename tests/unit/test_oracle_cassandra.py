@@ -220,7 +220,7 @@ async def test_oracle_handle_token_received(oracle_agent):
     oracle_agent.redis = AsyncMock()
     oracle_agent.perform_ta_analysis = AsyncMock(return_value={"signal": "bullish", "rsi": 50, "volume_trend": 1.0})
     
-    token = {"mint": VALID_MINT, "symbol": "TKN"}
+    token = {"mint": VALID_MINT, "symbol": "TKN", "is_graduated": True}
     c_id = str(uuid.uuid4())
     e_id = str(uuid.uuid4())
     envelope = {

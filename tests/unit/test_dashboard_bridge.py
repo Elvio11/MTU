@@ -140,14 +140,12 @@ async def test_bridge_forward_redis_messages_send_error(bridge):
 @pytest.mark.asyncio
 async def test_bridge_broadcast_system_stats_success(bridge):
     bridge.running = True
-    bridge.db_path = "test_positions.db"
-    # Create temp db
-    conn = sqlite3.connect(bridge.db_path)
-    conn.execute("CREATE TABLE positions (realised_pnl_sol REAL, state TEXT)")
-    conn.execute("INSERT INTO positions VALUES (1.0, 'OPEN')")
-    conn.commit()
-    conn.close()
-
+    bridge._get_db_metrics = MagicMock(return_value={
+        "total_pnl": 1.0,
+        "open_positions": 2,
+        "win_rate": 75.0
+    })
+    
     bridge.redis.get = AsyncMock(return_value="0.1")
     client = AsyncMock()
     bridge.clients.add(client)
@@ -161,17 +159,13 @@ async def test_bridge_broadcast_system_stats_success(bridge):
             bridge.running = False
         return None
 
-    try:
-        with patch(
-            "src.python.agents.dashboard_bridge.asyncio.sleep",
-            side_effect=sleep_side_effect,
-        ):
-            await bridge.broadcast_system_stats()
-    finally:
-        if os.path.exists(bridge.db_path):
-            os.remove(bridge.db_path)
+    with patch("src.python.agents.dashboard_bridge.asyncio.sleep", side_effect=sleep_side_effect):
+        await bridge.broadcast_system_stats()
 
     assert client.send.called
+    sent_payload = json.loads(client.send.call_args[0][0])
+    assert sent_payload["payload"]["metrics"]["total_pnl"] == 1.0
+    assert sent_payload["payload"]["metrics"]["open_positions"] == 2
 
 
 @pytest.mark.asyncio
@@ -316,10 +310,8 @@ async def test_bridge_forward_redis_messages_error(bridge):
 @pytest.mark.asyncio
 async def test_bridge_broadcast_system_stats_errors(bridge):
     bridge.running = True
-    bridge.db_path = "test_err.db"
-    open(bridge.db_path, "w").close()
     bridge.redis.get = AsyncMock(side_effect=Exception("redis fail"))
-    client = AsyncMock()
+    client = MagicMock()
     client.send = AsyncMock(side_effect=Exception("send fail"))
     bridge.clients.add(client)
 
@@ -333,7 +325,7 @@ async def test_bridge_broadcast_system_stats_errors(bridge):
 
     with (
         patch(
-            "src.python.agents.dashboard_bridge.sqlite3.connect",
+            "src.python.agents.dashboard_bridge.get_connection",
             side_effect=Exception("db fail"),
         ),
         patch(
@@ -343,8 +335,6 @@ async def test_bridge_broadcast_system_stats_errors(bridge):
     ):
         await bridge.broadcast_system_stats()
 
-    if os.path.exists(bridge.db_path):
-        os.remove(bridge.db_path)
     assert client not in bridge.clients
 
 
