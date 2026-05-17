@@ -35,9 +35,9 @@ const DEFAULT_CONFIG: TelegramConfig = {
 export default function SettingsPage() {
   const [wsUrl, setWsUrl] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('mtus_ws_url') || 'ws://localhost:3001';
+      return localStorage.getItem('mtus_ws_url') || 'ws://localhost:4001';
     }
-    return 'ws://localhost:3001';
+    return 'ws://localhost:4001';
   });
   const [saved, setSaved] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
@@ -115,7 +115,7 @@ export default function SettingsPage() {
             value={wsUrl}
             onChange={(e) => setWsUrl(e.target.value)}
             className="w-full px-4 py-2.5 bg-slate-800 border border-slate-600 rounded-lg text-white focus:border-mtus-accent focus:outline-none"
-            placeholder="ws://localhost:3001"
+            placeholder="ws://localhost:4001"
           />
         </div>
 

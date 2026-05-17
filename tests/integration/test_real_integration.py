@@ -113,7 +113,7 @@ class TestRealIntegrationExpanded:
         """Test NOFX agent has required methods"""
         from src.python.agents.nofx import NofxAgent
 
-        agent = NofxAgent()
+        agent = NofxAgent({})
         required_methods = [
             "connect_redis",
             "run",

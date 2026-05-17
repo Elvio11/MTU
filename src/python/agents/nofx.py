@@ -122,88 +122,31 @@ class NofxAgent:
         # print(f"AGT-01: Sending: {trade_msg}")
         # await self.ws.send(trade_msg)
 
-        wallet_msg = json.dumps({"method": "subscribeAccountTrade", "keys": []})
-        print(f"AGT-01: Sending: {wallet_msg}")
-        await self.ws.send(wallet_msg)
+        # wallet_msg = json.dumps({"method": "subscribeAccountTrade", "keys": []})
+        # print(f"AGT-01: Sending: {wallet_msg}")
+        # await self.ws.send(wallet_msg)
 
-        try:
-            migration_msg = json.dumps({"method": "subscribeMigration"})
-            print(f"AGT-01: Sending: {migration_msg}")
-            await self.ws.send(migration_msg)
-        except:
-            pass
+        # try:
+        #     migration_msg = json.dumps({"method": "subscribeMigration"})
+        #     print(f"AGT-01: Sending: {migration_msg}")
+        #     await self.ws.send(migration_msg)
+        # except:
+        #     pass
 
-        print("AGT-01: Subscribed to: NewToken, TokenTrade, AccountTrade, Migration")
+        print("AGT-01: WebSocket subscriptions DISABLED (Hydra is primary)")
         return True
 
     async def poll_for_tokens_http(self):
-        try:
-            resp = requests.get(
-                "https://api.dexscreener.com/latest/dex/tokens/solana", timeout=10
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                pairs = data.get("pairs", [])
-
-                pump_tokens = [p for p in pairs if p.get("dexId") == "pumpfun"]
-
-                for pair in pump_tokens[:10]:
-                    token_info = pair.get("baseToken", {})
-                    if token_info:
-                        mint = token_info.get("address", "")
-                        if mint and mint not in self._seen_mints:
-                            self._seen_mints.add(mint)
-
-                            payload = {
-                                "mint": mint,
-                                "name": token_info.get("name", "Unknown"),
-                                "symbol": token_info.get("symbol", "???"),
-                                "uri": token_info.get("uri") or None,
-                                "initialBuy": 0.0,
-                                "marketCapSol": float(pair.get("marketCap", 0)) / 1e9
-                                if pair.get("marketCap")
-                                else 0,
-                                "bondingCurveKey": pair.get("pool") or "11111111111111111111111111111111",
-                                "vSolInBondingCurve": float(
-                                    pair.get("liquidity", {}).get("sol", 0)
-                                )
-                                * 1e9
-                                if pair.get("liquidity", {}).get("sol")
-                                else 0,
-                                "traderPublicKey": token_info.get("creator") or "11111111111111111111111111111111",
-                            }
-                            await self._handle_new_token(payload)
-
-        except Exception as e:
-            print(f"AGT-01: HTTP polling error: {e}")
+        # HTTP Polling DISABLED in favor of Hydra
+        return
 
     def get_backoff_delay(self, attempt: int) -> int:
         delay = RECONNECT_BASE_DELAY * (2**attempt)
         return min(delay, RECONNECT_MAX_DELAY)
 
     async def connect_helius_ws(self):
-        from os import getenv
-
-        self.helius_ws_url = getenv(
-            "HELIUS_WS_URL",
-            "wss://mainnet.helius-rpc.com/?api-key=" + getenv("HELIUS_KEY", ""),
-        )
-        try:
-            self.helius_ws = await websockets.connect(self.helius_ws_url)
-
-            await self.helius_ws.send(
-                json.dumps(
-                    {
-                        "method": "subscribeProgram",
-                        "params": [RAYDIUM_AMM_V4],
-                    }
-                )
-            )
-            print("AGT-01: Connected to Helius WS for Raydium")
-            return True
-        except Exception as e:
-            print(f"AGT-01: Failed to connect to Helius WS: {e}")
-            return False
+        # Raydium subscription DISABLED in favor of Hydra
+        return True
 
     async def handle_pumpdev_message(self, payload: dict):
         if not isinstance(payload, dict):

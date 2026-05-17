@@ -1,88 +1,76 @@
-import { useWebSocket } from '@/lib/websocket';
+import React from 'react';
+import { GlassCard } from './GlassCard';
+import { TrendingUp, Zap, BarChart3 } from 'lucide-react';
+
+interface Position {
+  positionId: string;
+  mint: string;
+  symbol?: string;
+  entryPrice: number;
+  currentPrice: number;
+  pnl: number;
+  pnlPct: number;
+  state: string;
+  quantity: number;
+}
 
 interface PositionCardProps {
-  position: {
-    positionId: string;
-    mint: string;
-    symbol?: string;
-    entryPrice: number;
-    currentPrice: number;
-    pnl: number;
-    pnlPct: number;
-    state: string;
-    quantity?: number;
-  };
+  position: Position;
 }
 
-export default function PositionCard({ position }: PositionCardProps) {
-  const ws = useWebSocket();
-  const isPositive = position.pnl >= 0;
-
-  const stateColors: Record<string, string> = {
-    'OPEN': 'bg-mtus-accent',
-    'TP1_HIT': 'bg-profit',
-    'TP2_HIT': 'bg-profit',
-    'STOP_LOSS': 'bg-loss',
-    'CLOSED': 'bg-muted',
-    'LIQUIDATED': 'bg-loss',
-  };
-
-  const handleClose = () => {
-    if (confirm(`Close position ${position.positionId}?`)) {
-      ws?.send({ type: 'close_position', positionId: position.positionId });
-    }
-  };
+const PositionCard: React.FC<PositionCardProps> = ({ position }) => {
+  const isProfit = position.pnl >= 0;
 
   return (
-    <div className="bg-mtus-card p-4 rounded-xl border border-slate-700">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-white">{position.symbol || 'TOKEN'}</h3>
-          <p className="text-xs text-slate-400">{position.mint.slice(0, 8)}...</p>
-        </div>
-        <span className={`px-2 py-1 rounded text-xs text-white ${stateColors[position.state] || 'bg-muted'}`}>
-          {position.state}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 text-sm mb-3">
-        <div>
-          <p className="text-slate-400 text-xs">Entry Price</p>
-          <p className="text-white font-medium">{position.entryPrice.toFixed(6)} SOL</p>
-        </div>
-        <div>
-          <p className="text-slate-400 text-xs">Current</p>
-          <p className="text-white font-medium">{position.currentPrice.toFixed(6)} SOL</p>
-        </div>
-        {position.quantity !== undefined && (
-          <div>
-            <p className="text-slate-400 text-xs">Quantity</p>
-            <p className="text-white font-medium">{position.quantity.toFixed(4)}</p>
+    <GlassCard 
+      title={position.symbol || 'UNKNOWN'} 
+      subtitle={position.mint.slice(0, 12) + '...'} 
+      icon={TrendingUp}
+      className="h-full"
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Entry Price</span>
+            <p className="text-sm font-mono text-white/80">{position.entryPrice.toFixed(6)} SOL</p>
           </div>
-        )}
-      </div>
-
-      <div className="border-t border-slate-700 pt-3">
-        <div className="flex justify-between items-center">
-          <div>
-            <p className={`text-lg font-bold ${isPositive ? 'text-profit' : 'text-loss'}`}>
-              {isPositive ? '+' : ''}{position.pnl.toFixed(4)} SOL
-            </p>
-            <p className={`text-sm ${isPositive ? 'text-profit' : 'text-loss'}`}>
-              ({isPositive ? '+' : ''}{position.pnlPct.toFixed(1)}%)
-            </p>
+          <div className="space-y-1">
+            <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Current Price</span>
+            <p className="text-sm font-mono text-white">{position.currentPrice.toFixed(6)} SOL</p>
           </div>
-          {position.state === 'OPEN' && (
-            <button
-              onClick={handleClose}
-              className="px-3 py-1.5 bg-loss hover:bg-red-700 rounded text-sm font-medium transition-colors disabled:opacity-50"
-              disabled={!ws?.connected}
-            >
-              Close
-            </button>
-          )}
+        </div>
+
+        <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className={`p-1.5 rounded-lg ${isProfit ? 'bg-profit/20 text-profit' : 'bg-loss/20 text-loss'}`}>
+              <BarChart3 size={14} />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-muted uppercase">Return</span>
+              <span className={`text-sm font-bold ${isProfit ? 'text-profit' : 'text-loss'}`}>
+                {isProfit ? '+' : ''}{position.pnlPct.toFixed(2)}%
+              </span>
+            </div>
+          </div>
+          <div className="text-right">
+            <span className="text-[10px] font-bold text-muted uppercase block">PnL</span>
+            <span className={`text-sm font-bold ${isProfit ? 'text-profit' : 'text-loss'}`}>
+              {isProfit ? '+' : ''}{position.pnl.toFixed(4)} SOL
+            </span>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button className="flex-1 py-2 bg-mtus-accent/10 border border-mtus-accent/20 text-mtus-accent rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-mtus-accent/20 transition-all flex items-center justify-center gap-2">
+            <Zap size={12} /> Fast Sell
+          </button>
+          <button className="px-3 py-2 bg-white/5 border border-white/10 text-white rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all">
+            Details
+          </button>
         </div>
       </div>
-    </div>
+    </GlassCard>
   );
-}
+};
+
+export default PositionCard;

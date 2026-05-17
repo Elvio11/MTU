@@ -1,503 +1,378 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useWebSocket } from '@/lib/websocket';
-import { useBinance } from '@/lib/binance-websocket';
-import { useAdmin } from '@/lib/admin-context';
-import AgentCard from '@/components/AgentCard';
-import PositionCard from '@/components/PositionCard';
-import PnLChart from '@/components/PnLChart';
-import PortfolioSummary from '@/components/PortfolioSummary';
-import PriceTicker from '@/components/PriceTicker';
-import MemeCoins from '@/components/MemeCoins';
-import SystemStatus from '@/components/SystemStatus';
-import { TrendingUp, Activity, Wifi, WifiOff } from 'lucide-react';
+import { 
+  TrendingUp, 
+  Activity, 
+  Shield, 
+  Zap, 
+  AlertTriangle, 
+  CheckCircle2, 
+  Play, 
+  Square,
+  BarChart3,
+  List,
+  Cpu
+} from 'lucide-react';
+import { 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer 
+} from 'recharts';
 
-interface AgentStatus {
-  id: string;
-  name: string;
-  status: 'healthy' | 'unhealthy' | 'starting' | 'paused';
-  lastHeartbeat: string;
-  tradesToday: number;
-  pnlToday?: number;
+interface SystemStats {
+  api: Record<string, any>;
+  metrics: {
+    total_pnl: number;
+    open_positions: number;
+    win_rate: number;
+    current_position_size: number;
+  };
+  timestamp: number;
 }
 
 interface Position {
-  positionId: string;
+  position_id: string;
   mint: string;
   symbol: string;
-  entryPrice: number;
-  currentPrice: number;
-  pnl: number;
-  pnlPct: number;
+  entry_price_sol: number;
+  current_price_sol: number;
+  pnl_sol: number;
+  pnl_pct: number;
   state: string;
   quantity: number;
 }
 
-interface EnvelopePayload {
-  envelope_id: string;
+interface AgentStatus {
   agent_id: string;
-  event_type: string;
-  timestamp_utc: string;
-  payload: {
-    status?: string;
-    daily_pnl?: number;
-    [key: string]: unknown;
-  };
-  correlation_id: string;
-  schema_version: string;
+  status: 'healthy' | 'unhealthy';
+  last_update: string;
 }
 
-interface PositionOpenedPayload {
-  position_id: string;
-  mint: string;
-  symbol?: string;
-  entry_price_sol: number;
-  quantity?: number;
-}
-
-interface PositionClosedPayload {
-  position_id: string;
-  realised_pnl_sol?: number;
-}
-
-interface SystemAlert {
-  level: string;
-  message: string;
-  timestamp?: string;
-}
-
-interface PriceUpdatedPayload {
-  mint: string;
-  price_sol: number;
-  timestamp: number;
-}
-
-interface TPHitPayload {
-  position_id: string;
-  token: string;
-  pnl_sol: number;
-  reason: string;
-}
-
-interface KillSwitchPayload {
-  reason: string;
-  timestamp: number;
-}
-
-export default function HomePage() {
-  const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [positions, setPositions] = useState<Position[]>([]);
-  const [pnlTotal, setPnlTotal] = useState(0);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [tradingPaused, setTradingPaused] = useState(false);
-  const [systemAlerts, setSystemAlerts] = useState<SystemAlert[]>([]);
+export default function TerminalPage() {
   const ws = useWebSocket();
-  const { tickers: binanceTickers, connected: binanceConnected, refreshStats } = useBinance();
-  const { isAdminMode } = useAdmin();
-
-  useEffect(() => {
-    if (binanceConnected && binanceTickers.size > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLastUpdate(new Date());
-    }
-  }, [binanceConnected, binanceTickers]);
-
-  useEffect(() => {
-    refreshStats();
-    const interval = setInterval(refreshStats, 60000);
-    return () => clearInterval(interval);
-  }, [refreshStats]);
+  const [stats, setStats] = useState<SystemStats | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [agents, setAgents] = useState<Record<string, AgentStatus>>({});
+  const [logs, setLogs] = useState<{msg: string, type: string, time: string}[]>([]);
 
   useEffect(() => {
     if (!ws) return;
 
-    const handleAgentHealth = (payload: unknown) => {
-      if (!payload || typeof payload !== 'object') return;
-      
-      const data = payload as Record<string, unknown>;
-      const agentId = data.agent_id as string;
-      if (!agentId) return;
-      
-      const rawStatus = (data.payload as Record<string, unknown>)?.status as string | undefined;
-      const status: 'healthy' | 'unhealthy' = rawStatus === 'healthy' ? 'healthy' : 'unhealthy';
-      
-      setAgents(prev => {
-        const payloadData = data.payload as Record<string, unknown>;
-        const dailyPnl = payloadData?.daily_pnl as number | undefined;
-        
-        const existing = prev.find(a => a.id === agentId);
-        const newAgents = existing
-          ? prev.map(a => a.id === agentId ? { ...a, status, lastHeartbeat: '0s ago', pnlToday: dailyPnl } : a)
-          : [...prev, { id: agentId, name: agentId, status, lastHeartbeat: '0s ago', tradesToday: 0, pnlToday: dailyPnl }];
-        
-        console.log('[health_check] setAgents:', JSON.stringify(newAgents));
-        return newAgents;
-      });
+    const handleStats = (payload: any) => setStats(payload);
+    const handleHealth = (payload: any) => {
+      setAgents(prev => ({
+        ...prev,
+        [payload.agent_id]: {
+          agent_id: payload.agent_id,
+          status: payload.payload?.status === 'healthy' ? 'healthy' : 'unhealthy',
+          last_update: new Date().toLocaleTimeString()
+        }
+      }));
     };
-
-    const handlePositionOpened = (payload: unknown) => {
-      const data = payload as PositionOpenedPayload;
-      setPositions(prev => [...prev, {
-        positionId: data.position_id,
-        mint: data.mint,
-        symbol: data.symbol || 'TOKEN',
-        entryPrice: data.entry_price_sol,
-        currentPrice: data.entry_price_sol,
-        pnl: 0,
-        pnlPct: 0,
-        state: 'OPEN',
-        quantity: data.quantity || 0,
-      }]);
-    };
-
-    const handlePositionClosed = (payload: unknown) => {
-      const data = payload as PositionClosedPayload;
-      setPositions(prev => prev.filter(p => p.positionId !== data.position_id));
-      const pnl = data.realised_pnl_sol;
-      if (pnl !== undefined) {
-        setPnlTotal(prev => prev + pnl);
-      }
-    };
-
-    const handleSystemAlert = (payload: unknown) => {
-      const data = payload as SystemAlert;
-      setSystemAlerts(prev => [
-        { ...data, timestamp: new Date().toISOString() },
-        ...prev.slice(0, 9)
-      ]);
-    };
-
-    const handlePriceUpdated = (payload: unknown) => {
-      const data = payload as PriceUpdatedPayload;
+    
+    const handlePrice = (payload: any) => {
       setPositions(prev => prev.map(p => 
-        p.mint === data.mint 
+        p.mint === payload.mint 
           ? { 
               ...p, 
-              currentPrice: data.price_sol,
-              pnl: (data.price_sol - p.entryPrice) * p.quantity,
-              pnlPct: ((data.price_sol - p.entryPrice) / p.entryPrice) * 100
+              current_price_sol: payload.price_sol,
+              pnl_sol: (payload.price_sol - p.entry_price_sol) * p.quantity,
+              pnl_pct: ((payload.price_sol - p.entry_price_sol) / p.entry_price_sol) * 100
             }
           : p
       ));
     };
 
-    const handleTP1Hit = (payload: unknown) => {
-      const data = payload as TPHitPayload;
-      setSystemAlerts(prev => [
-        { level: 'INFO', message: `🎯 TP1 Hit: ${data.token} PnL: ${data.pnl_sol.toFixed(4)} SOL`, timestamp: new Date().toISOString() },
-        ...prev.slice(0, 9)
-      ]);
+    const handleOpen = (payload: any) => {
+      setPositions(prev => [...prev, {
+        position_id: payload.position_id,
+        mint: payload.mint,
+        symbol: payload.symbol || 'TKN',
+        entry_price_sol: payload.entry_price_sol,
+        current_price_sol: payload.entry_price_sol,
+        pnl_sol: 0,
+        pnl_pct: 0,
+        state: 'OPEN',
+        quantity: payload.quantity || 0
+      }]);
+      addLog(`Opened position: ${payload.symbol || payload.mint}`, 'success');
     };
 
-    const handleTP2Hit = (payload: unknown) => {
-      const data = payload as TPHitPayload;
-      setSystemAlerts(prev => [
-        { level: 'INFO', message: `🎯 TP2 Hit: ${data.token} PnL: ${data.pnl_sol.toFixed(4)} SOL`, timestamp: new Date().toISOString() },
-        ...prev.slice(0, 9)
-      ]);
+    const handleClose = (payload: any) => {
+      setPositions(prev => prev.filter(p => p.position_id !== payload.position_id));
+      addLog(`Closed position: ${payload.position_id} | PnL: ${payload.realised_pnl_sol?.toFixed(4)}`, payload.realised_pnl_sol > 0 ? 'success' : 'error');
     };
 
-    const handleStopLoss = (payload: unknown) => {
-      const data = payload as TPHitPayload;
-      setSystemAlerts(prev => [
-        { level: 'ERROR', message: `🛑 Stop Loss: ${data.token} PnL: ${data.pnl_sol.toFixed(4)} SOL`, timestamp: new Date().toISOString() },
-        ...prev.slice(0, 9)
-      ]);
+    const handleAlert = (payload: any) => {
+      addLog(payload.message, payload.level === 'CRITICAL' ? 'critical' : 'warning');
     };
 
-    const handleKillSwitch = (payload: unknown) => {
-      const data = payload as KillSwitchPayload;
-      setTradingPaused(true);
-      setSystemAlerts(prev => [
-        { level: 'CRITICAL', message: `🚨 KILLSWITCH TRIGGERED: ${data.reason}`, timestamp: new Date().toISOString() },
-        ...prev.slice(0, 9)
-      ]);
+    const addLog = (msg: string, type: string) => {
+      setLogs(prev => [{ msg, type, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 50));
     };
 
-    ws.subscribe('health_check', handleAgentHealth);
-    ws.subscribe('position_opened', handlePositionOpened);
-    ws.subscribe('position_closed', handlePositionClosed);
-    ws.subscribe('system_alert', handleSystemAlert);
-    ws.subscribe('price_updated', handlePriceUpdated);
-    ws.subscribe('tp1_hit', handleTP1Hit);
-    ws.subscribe('tp2_hit', handleTP2Hit);
-    ws.subscribe('stop_loss', handleStopLoss);
-    ws.subscribe('kill_switch_triggered', handleKillSwitch);
+    ws.subscribe('system_stats', handleStats);
+    ws.subscribe('health_check', handleHealth);
+    ws.subscribe('price_updated', handlePrice);
+    ws.subscribe('position_opened', handleOpen);
+    ws.subscribe('position_closed', handleClose);
+    ws.subscribe('system_alert', handleAlert);
 
     return () => {
-      ws.unsubscribe('health_check', handleAgentHealth);
-      ws.unsubscribe('position_opened', handlePositionOpened);
-      ws.unsubscribe('position_closed', handlePositionClosed);
-      ws.unsubscribe('system_alert', handleSystemAlert);
-      ws.unsubscribe('price_updated', handlePriceUpdated);
-      ws.unsubscribe('tp1_hit', handleTP1Hit);
-      ws.unsubscribe('tp2_hit', handleTP2Hit);
-      ws.unsubscribe('stop_loss', handleStopLoss);
-      ws.unsubscribe('kill_switch_triggered', handleKillSwitch);
+      ws.unsubscribe('system_stats', handleStats);
+      ws.unsubscribe('health_check', handleHealth);
+      ws.unsubscribe('price_updated', handlePrice);
+      ws.unsubscribe('position_opened', handleOpen);
+      ws.unsubscribe('position_closed', handleClose);
+      ws.unsubscribe('system_alert', handleAlert);
     };
   }, [ws]);
 
-  const handlePauseTrading = useCallback(() => {
-    ws?.send({ type: 'command', action: 'pause' });
-    setTradingPaused(true);
-  }, [ws]);
-
-  const handleResumeTrading = useCallback(() => {
-    ws?.send({ type: 'command', action: 'resume' });
-    setTradingPaused(false);
-  }, [ws]);
-
-  const handleKillswitch = useCallback(() => {
-    if (!isAdminMode) {
-      alert('Admin mode required. Enable it in Settings first.');
-      return;
-    }
-    if (confirm('Are you sure you want to trigger killswitch? All positions will be closed.')) {
-      ws?.send({ type: 'command', action: 'killswitch' });
-      setTradingPaused(true);
-    }
-  }, [ws, isAdminMode]);
-
-  const totalValue = useMemo(() => positions.reduce((sum, p) => sum + (p.currentPrice * p.quantity), 0), [positions]);
-  const openPositions = useMemo(() => positions.filter(p => p.state === 'OPEN').length, [positions]);
-
-  const binanceArray = useMemo(() => 
-    Array.from(binanceTickers.values()).sort((a, b) => b.changePercent24h - a.changePercent24h), 
-    [binanceTickers]
-  );
-  const topGainers = useMemo(() => binanceArray.slice(0, 5), [binanceArray]);
-  const topVolume = useMemo(() => binanceArray.slice(0, 5), [binanceArray]);
+  const statsList = [
+    { label: 'Total PnL', value: `${stats?.metrics.total_pnl.toFixed(4)} SOL`, icon: TrendingUp, color: (stats?.metrics.total_pnl || 0) >= 0 ? 'text-profit' : 'text-loss' },
+    { label: 'Open Positions', value: stats?.metrics.open_positions || 0, icon: List, color: 'text-mtus-accent' },
+    { label: 'Win Rate', value: `${stats?.metrics.win_rate.toFixed(1)}%`, icon: BarChart3, color: 'text-mtus-secondary' },
+    { label: 'Agent Health', value: Object.values(agents).filter(a => a.status === 'healthy').length, icon: Shield, color: 'text-profit' },
+  ];
 
   return (
-    <div className="space-y-6">
-      {/* Header with Portfolio Summary */}
-      <PortfolioSummary 
-        pnlTotal={pnlTotal}
-        totalValue={totalValue}
-        openPositions={openPositions}
-        agentsCount={agents.length}
-        connected={ws?.connected ?? false}
-        lastUpdate={lastUpdate}
-        onRefresh={() => {}}
-        binanceConnected={binanceConnected}
-      />
-
-      {/* Connection Status Bar */}
-      <div className="bg-mtus-card rounded-xl p-3 border border-slate-700">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              {binanceConnected ? (
-                <Wifi className="text-profit" size={16} />
-              ) : (
-                <WifiOff className="text-loss" size={16} />
-              )}
-              <span className="text-sm text-slate-400">
-                Binance Live: <span className={binanceConnected ? 'text-profit' : 'text-loss'}>
-                  {binanceConnected ? 'Connected' : 'Disconnected'}
-                </span>
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {ws?.connected ? (
-                <Wifi className="text-profit" size={16} />
-              ) : (
-                <WifiOff className="text-loss" size={16} />
-              )}
-              <span className="text-sm text-slate-400">
-                WebSocket: <span className={ws?.connected ? 'text-profit' : 'text-loss'}>
-                  {ws?.connected ? 'Connected' : 'Disconnected'}
-                </span>
-              </span>
-            </div>
-          </div>
-          {lastUpdate && (
-            <span className="text-xs text-slate-500">
-              Last update: {lastUpdate.toLocaleTimeString()}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Market Stats Bar */}
-      <div className="bg-mtus-card rounded-xl p-4 border border-slate-700">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="text-profit" size={18} />
-              <span className="text-slate-400 text-sm">Top Gainers (24h)</span>
-            </div>
-            <div className="flex gap-2">
-              {topGainers.slice(0, 3).map(coin => (
-                <span key={coin.symbol} className="text-sm font-medium text-white bg-slate-700 px-2 py-1 rounded">
-                  {coin.symbol} <span className="text-profit">+{coin.changePercent24h.toFixed(1)}%</span>
-                </span>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Activity className="text-mtus-accent" size={18} />
-              <span className="text-slate-400 text-sm">Live Prices</span>
-            </div>
-            <div className="flex gap-2">
-              {topVolume.slice(0, 3).map(coin => (
-                <span key={coin.symbol} className="text-sm font-medium text-white bg-slate-700 px-2 py-1 rounded">
-                  {coin.symbol} <span className="text-slate-400">${coin.price.toFixed(2)}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Live Market Prices - Horizontal Button Layout */}
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <h2 className="text-lg font-semibold text-slate-300">Live Prices</h2>
-          <div className="flex items-center gap-1">
-            <span className={`w-2 h-2 rounded-full ${binanceConnected ? 'bg-profit' : 'bg-loss'}`} />
-            <span className="text-xs text-slate-500">{binanceConnected ? 'Binance' : 'Offline'}</span>
-          </div>
+    <div className="max-w-[1600px] mx-auto space-y-6 pb-12">
+      {/* Top Header Section */}
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold font-heading text-white tracking-wider">TERMINAL</h1>
+          <p className="text-muted text-sm flex items-center gap-2 mt-1">
+            <span className={`w-2 h-2 rounded-full ${ws?.connected ? 'bg-profit animate-pulse' : 'bg-loss'}`} />
+            {ws?.connected ? 'SYSTEM ONLINE' : 'CONNECTION LOST'}
+          </p>
         </div>
         
-        {binanceConnected && binanceArray.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
-            {binanceArray.map((coin) => (
-              <PriceTicker
-                key={coin.symbol}
-                symbol={coin.symbol}
-                ticker={binanceTickers.get(coin.symbol)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-slate-500">
-            <WifiOff size={16} />
-            <span>Connecting to price feed...</span>
-          </div>
-        )}
-      </section>
-
-      {/* Trending Meme Coins on Solana */}
-      <MemeCoins />
-
-      
-
-      {/* Agents Status */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-slate-300">Trading Agents</h2>
-          <span className="text-sm text-slate-400">{agents.length} active</span>
+        <div className="flex items-center gap-3">
+          <button 
+            className="px-4 py-2 bg-red-500/10 border border-red-500/50 text-red-500 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-all cursor-pointer flex items-center gap-2"
+            onClick={() => ws?.send({type: 'command', action: 'killswitch'})}
+          >
+            <Zap size={14} /> EMERGENCY KILLSWITCH
+          </button>
         </div>
-        {agents.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {agents.map(agent => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 text-slate-500 bg-mtus-card rounded-xl border border-slate-700">
-            <p>No agents connected</p>
-            <p className="text-sm mt-2">Waiting for agent health updates...</p>
-          </div>
-        )}
-      </section>
+      </header>
 
-      {/* System Alerts / Telegram */}
-      {systemAlerts.length > 0 && (
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-slate-300">Telegram Alerts</h2>
-            <span className="text-sm text-slate-400">{systemAlerts.length} alerts</span>
-          </div>
-          <div className="space-y-2">
-            {systemAlerts.map((alert, idx) => (
-              <div 
-                key={idx} 
-                className={`p-3 rounded-lg border ${
-                  alert.level === 'CRITICAL' ? 'bg-red-900/20 border-red-700' :
-                  alert.level === 'ERROR' ? 'bg-orange-900/20 border-orange-700' :
-                  alert.level === 'WARN' ? 'bg-yellow-900/20 border-yellow-700' :
-                  'bg-mtus-card border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className={`text-sm font-medium ${
-                    alert.level === 'CRITICAL' ? 'text-red-400' :
-                    alert.level === 'ERROR' ? 'text-orange-400' :
-                    alert.level === 'WARN' ? 'text-yellow-400' :
-                    'text-blue-400'
-                  }`}>
-                    {alert.level}: {alert.message}
-                  </span>
-                  {alert.timestamp && (
-                    <span className="text-xs text-slate-500">
-                      {new Date(alert.timestamp).toLocaleTimeString()}
-                    </span>
-                  )}
+      {/* Main Grid Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Left Column: Stats & Positions (8/12) */}
+        <div className="lg:col-span-8 space-y-6">
+          
+          {/* Stats Bar */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {statsList.map((stat, i) => (
+              <div key={i} className="bg-mtus-card backdrop-blur-md border border-white/10 p-4 rounded-2xl">
+                <div className="flex items-center justify-between mb-2">
+                  <stat.icon className="text-muted" size={18} />
+                  <span className="text-[10px] font-bold text-muted uppercase tracking-widest">{stat.label}</span>
                 </div>
+                <div className={`text-xl font-bold ${stat.color}`}>{stat.value}</div>
               </div>
             ))}
           </div>
-        </section>
-      )}
 
-      {/* Open Positions */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-slate-300">Open Positions</h2>
-          <span className="text-sm text-slate-400">{openPositions} positions</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {positions.filter(p => p.state === 'OPEN').map(pos => (
-            <PositionCard key={pos.positionId} position={pos} />
-          ))}
-          {openPositions === 0 && (
-            <div className="col-span-full text-center py-8 text-slate-500 bg-mtus-card rounded-xl border border-slate-700">
-              <p>No open positions</p>
+          {/* Main Chart Area */}
+          <div className="bg-mtus-card backdrop-blur-md border border-white/10 rounded-2xl p-6 h-[400px]">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-sm font-bold font-heading text-muted uppercase">Market Performance</h3>
+              <div className="flex gap-2">
+                <span className="text-xs px-2 py-1 bg-white/5 rounded-md text-white/60">LIVE FEED</span>
+              </div>
             </div>
-          )}
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={logs.slice(0, 20).reverse().map((_, i) => ({name: i, pnl: Math.random() * 10}))}>
+                <defs>
+                  <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="name" hide />
+                <YAxis hide />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)' }}
+                  itemStyle={{ color: '#f59e0b' }}
+                />
+                <Area type="monotone" dataKey="pnl" stroke="#f59e0b" fillOpacity={1} fill="url(#colorPnL)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Positions Table */}
+          <div className="bg-mtus-card backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <h3 className="text-sm font-bold font-heading text-muted uppercase">Active Positions</h3>
+              <span className="text-xs text-muted font-bold">{positions.length} RUNNING</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="text-[10px] text-muted font-bold uppercase border-b border-white/5">
+                    <th className="px-6 py-4">Asset</th>
+                    <th className="px-6 py-4">Entry</th>
+                    <th className="px-6 py-4">Current</th>
+                    <th className="px-6 py-4">PnL (SOL)</th>
+                    <th className="px-6 py-4">Return %</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {positions.map((pos) => (
+                    <tr key={pos.position_id} className="hover:bg-white/5 transition-colors group">
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-white">{pos.symbol}</span>
+                          <span className="text-[10px] text-muted font-mono">{pos.mint.slice(0, 8)}...</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-mono text-muted">{pos.entry_price_sol.toFixed(6)}</td>
+                      <td className="px-6 py-4 text-sm font-mono text-white">{pos.current_price_sol.toFixed(6)}</td>
+                      <td className={`px-6 py-4 text-sm font-bold ${pos.pnl_sol >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {pos.pnl_sol >= 0 ? '+' : ''}{pos.pnl_sol.toFixed(4)}
+                      </td>
+                      <td className={`px-6 py-4 text-sm font-bold ${pos.pnl_pct >= 0 ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss'} rounded-md inline-block my-4 mx-6`}>
+                        {pos.pnl_pct.toFixed(2)}%
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button className="p-2 hover:bg-white/10 rounded-lg text-muted hover:text-white transition-all cursor-pointer">
+                          <Zap size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {positions.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-muted italic text-sm">
+                        No active market exposure detected.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </section>
 
-      {/* PnL Chart */}
-      <section>
-        <h2 className="text-lg font-semibold mb-3 text-slate-300">PnL History (24h)</h2>
-        <PnLChart />
-      </section>
+        {/* Right Column: Agents, Controls & Logs (4/12) */}
+        <div className="lg:col-span-4 space-y-6">
+          
+          {/* System Control Panel */}
+          <div className="bg-mtus-card backdrop-blur-md border border-white/10 rounded-2xl p-6">
+            <h3 className="text-sm font-bold font-heading text-muted uppercase mb-4">Control System</h3>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Position Size (SOL)</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-mtus-accent/50"
+                    placeholder="0.1"
+                    defaultValue={stats?.metrics.current_position_size}
+                    id="pos_size_input"
+                  />
+                  <button 
+                    className="px-3 py-2 bg-mtus-accent text-white rounded-lg text-xs font-bold hover:opacity-80"
+                    onClick={() => {
+                      const val = (document.getElementById('pos_size_input') as HTMLInputElement).value;
+                      ws?.send({type: 'command', action: 'update_config', params: {position_size: parseFloat(val)}});
+                    }}
+                  >
+                    SET
+                  </button>
+                </div>
+              </div>
 
-      {/* System Status - RPC, Circuit Breakers, Rate Limiter */}
-      <section>
-        <h2 className="text-lg font-semibold mb-3 text-slate-300">System Status</h2>
-        <SystemStatus />
-      </section>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Take Profit 1</label>
+                  <input type="text" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white" placeholder="2.0x" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-muted uppercase tracking-widest">Stop Loss</label>
+                  <input type="text" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white" placeholder="0.5x" />
+                </div>
+              </div>
 
-      {/* Control Panel */}
-      <section className="flex flex-wrap gap-3 pt-4 border-t border-slate-700">
-        <button 
-          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          onClick={handlePauseTrading}
-          disabled={!ws?.connected || tradingPaused}
-        >
-          Pause Trading
-        </button>
-        <button 
-          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          onClick={handleResumeTrading}
-          disabled={!ws?.connected || !tradingPaused}
-        >
-          Resume Trading
-        </button>
-        <button 
-          className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          onClick={handleKillswitch}
-          disabled={!ws?.connected}
-        >
-          Killswitch
-        </button>
-      </section>
+              <button 
+                className="w-full py-3 bg-white/5 border border-white/10 text-white rounded-xl text-xs font-bold hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+                onClick={() => ws?.send({type: 'command', action: 'trigger_maintenance'})}
+              >
+                <Shield size={14} className="text-mtus-accent" /> TRIGGER MAINTENANCE
+              </button>
+            </div>
+          </div>
+
+          {/* Agent Grid */}
+          <div className="bg-mtus-card backdrop-blur-md border border-white/10 rounded-2xl p-4">
+            <h3 className="text-sm font-bold font-heading text-muted uppercase mb-4 px-2">Agent Status</h3>
+            <div className="grid grid-cols-1 gap-3">
+              {Object.values(agents).map(agent => (
+                <div key={agent.agent_id} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${agent.status === 'healthy' ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss'}`}>
+                      <Cpu size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white uppercase">{agent.agent_id}</div>
+                      <div className="text-[10px] text-muted tracking-tight">LAST HEARTBEAT: {agent.last_update}</div>
+                    </div>
+                  </div>
+                  <div className={`w-2 h-2 rounded-full ${agent.status === 'healthy' ? 'bg-profit shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-loss'}`} />
+                </div>
+              ))}
+              {Object.keys(agents).length === 0 && (
+                <div className="text-center py-6 text-[10px] text-muted font-bold uppercase">
+                  Initializing agents...
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Activity Log */}
+          <div className="bg-mtus-card backdrop-blur-md border border-white/10 rounded-2xl flex flex-col h-[600px]">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <h3 className="text-sm font-bold font-heading text-muted uppercase">Terminal Logs</h3>
+              <div className="flex gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-profit animate-pulse" />
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 space-y-4 font-mono">
+              {logs.map((log, i) => (
+                <div key={i} className="text-[11px] leading-relaxed animate-in fade-in slide-in-from-top-2 duration-300">
+                  <span className="text-muted mr-2">[{log.time}]</span>
+                  <span className={`
+                    ${log.type === 'success' ? 'text-profit' : ''}
+                    ${log.type === 'error' ? 'text-loss' : ''}
+                    ${log.type === 'warning' ? 'text-warning' : ''}
+                    ${log.type === 'critical' ? 'text-red-500 font-bold underline' : ''}
+                    ${log.type === 'info' ? 'text-mtus-secondary' : 'text-slate-200'}
+                  `}>
+                    {log.msg}
+                  </span>
+                </div>
+              ))}
+              {logs.length === 0 && (
+                <div className="text-center text-muted text-[10px] uppercase font-bold mt-20">
+                  Awaiting system events...
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { Keypair, Transaction, TransactionInstruction, PublicKey } from '@solana/web3.js';
 import { QuoteResponse, SwapApi } from '@jup-ag/api';
 import { Connection, VersionedTransaction, VersionedMessage } from '@solana/web3.js';
+import { execSync } from 'child_process';
 import { AgentMessageEnvelope, createEnvelope, EventType } from '../shared/envelope';
 import { loadKeypairFromKeystore } from '../shared/keystore';
 import { CircuitBreaker } from '../shared/circuit-breaker';
@@ -8,12 +9,15 @@ import { isOperationalWindowActive } from '../shared/operational-window';
 import { CHANNEL_TRADE_APPROVED, CHANNEL_TRADE_FAILED, CHANNEL_POSITION_OPENED } from '../shared/channels';
 import Redis from 'ioredis';
 import { createRedisClient } from '../shared/redis';
+export { createRedisClient };
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { insertPosition, updatePosition, insertAuditLog } from '../shared/db';
+import { insertPosition, updatePosition, insertAuditLog, getOpenPositions } from '../shared/db';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
+
+let lastKnownSolPrice = 168.5; // Shared cache for price fallbacks
 
 dotenv.config();
 
@@ -23,13 +27,14 @@ const SLIPPAGE_LADDER = [500, 1000, 1500];
 const RETRY_DELAYS = [0, 500, 1000];
 
 // Dynamic Balance Guard constants
-const RENT_ATA = 2039280;    // 0.00204 SOL - Rent for new Token ATA
-const RENT_WSOL = 0;          // 0.0 SOL - Wallet likely has wSOL already
-const FEE_BUFFER = 50000000;   // 0.0005 SOL - Buffer for network fees
+const RENT_ATA = 2039280;        // 0.00204 SOL - Rent for new Token ATA
+const RENT_WSOL = 0;             // 0.0 SOL - Wallet likely has wSOL already
+const FEE_BUFFER = 500000;       // 0.0005 SOL - Base blockchain transaction fee (unchanged)
+const PRIORITY_FEE_BUFFER = 5000000; // 0.005 SOL - Max priority fee (user-configured, separate)
 
 
 // Helper: Determine which Jupiter API to use based on USD value
-async function getJupiterApiVersion(positionSizeSol: number): Promise<{ version: 'v1' | 'v2', usdValue: number }> {
+export async function getJupiterApiVersion(positionSizeSol: number): Promise<{ version: 'v1' | 'v2', usdValue: number }> {
   const solPrice = await getSolPriceUsd();
   const usdValue = positionSizeSol * solPrice;
   
@@ -41,7 +46,7 @@ async function getJupiterApiVersion(positionSizeSol: number): Promise<{ version:
 }
 
 // Helper: Check if wallet can afford the trade
-async function canAffordTrade(
+export async function canAffordTrade(
   connection: Connection,
   walletPubkey: any,
   positionSol: number
@@ -50,13 +55,12 @@ async function canAffordTrade(
   const balance = await connection.getBalance(walletPubkey);
   
   const positionLamports = positionSol * LAMPORTS_PER_SOL;
-  // Estimate: Trade amount + rent for wSOL + rent for token ATA + fee buffer
-  // Note: May need 2 ATAs if both wSOL and token are new
-  const totalNeed = positionLamports + RENT_WSOL + RENT_ATA + FEE_BUFFER;
+  // Total: Trade amount + ATA rent + base tx fee + max priority fee
+  const totalNeed = positionLamports + RENT_WSOL + RENT_ATA + FEE_BUFFER + PRIORITY_FEE_BUFFER;
   
   const haveSol = balance / LAMPORTS_PER_SOL;
   const needSol = totalNeed / LAMPORTS_PER_SOL;
-  const breakdown = `Position: ${positionSol} SOL + Rent: ${(RENT_WSOL+RENT_ATA)/LAMPORTS_PER_SOL} SOL + Buffer: ${FEE_BUFFER/LAMPORTS_PER_SOL} SOL = ${needSol.toFixed(6)} SOL`;
+  const breakdown = `Position: ${positionSol} SOL + ATA: ${(RENT_WSOL+RENT_ATA)/LAMPORTS_PER_SOL} SOL + BaseFee: ${FEE_BUFFER/LAMPORTS_PER_SOL} SOL + PriorityFee: ${PRIORITY_FEE_BUFFER/LAMPORTS_PER_SOL} SOL = ${needSol.toFixed(6)} SOL required`;
   
   return {
     ok: balance >= totalNeed,
@@ -67,9 +71,10 @@ async function canAffordTrade(
 }
 
 // TP/SL Monitoring Helper Functions (used by Sentinel via shared module)
-async function fetchTokenPrice(mint: string): Promise<number> {
+export async function fetchTokenPrice(mint: string): Promise<number> {
   try {
     const resp = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`, { 
+      headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
       signal: AbortSignal.timeout(5000) 
     });
     const data: any = await resp.json();
@@ -192,28 +197,59 @@ class RateLimiter {
 }
 
 export async function getSolPriceUsd(config?: any): Promise<number> {
+  const SOL_MINT = 'So11111111111111111111111111111111111111112';
+  
   try {
-    const response = await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112', {
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!response.ok) throw new Error(`Price fetch failed: ${response.status}`);
-    const data: any = await response.json();
-    const price = data?.data?.So11111111111111111111111111111111111111112?.price;
-    if (price && typeof price === 'number' && price > 0) {
-      return price;
-    }
-    throw new Error('No price in response');
-  } catch (e) {
-    console.log(`AGT-05: [PRICE] Using fallback SOL price: $200`);
-    return 200; // Fallback to approximate price
+    return await rateLimitedRequest(async () => {
+      // 1. Try Jupiter V3 (Primary)
+      try {
+        const response = await axios.get(`https://api.jup.ag/price/v3?ids=${SOL_MINT}`, { 
+          headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
+          timeout: 5000 
+        });
+        const price = response.data?.[SOL_MINT]?.usdPrice || response.data?.data?.[SOL_MINT]?.price;
+        if (price && typeof price === 'number' && price > 0) {
+          lastKnownSolPrice = price;
+          return price;
+        }
+      } catch (e) {}
+
+      // 2. Try Binance Public API (Reliable Tertiary for SOL/USDT)
+      try {
+        const binanceResp = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT', { timeout: 5000 });
+        const price = parseFloat(binanceResp.data?.price);
+        if (price > 0) {
+          lastKnownSolPrice = price;
+          return price;
+        }
+      } catch (e) {}
+
+      // 3. Try Birdeye (Fallback)
+      try {
+        const birdeyeResp = await axios.get(`https://public-api.birdeye.so/public/price?address=${SOL_MINT}`, {
+          headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || '' },
+          timeout: 5000
+        });
+        const price = birdeyeResp.data?.data?.value;
+        if (price && typeof price === 'number' && price > 0) {
+          lastKnownSolPrice = price;
+          return price;
+        }
+      } catch (e) {}
+
+      throw new Error('All SOL price providers failed');
+    }, config);
+  } catch (e: any) {
+    console.warn(`[PRICE WARNING] All providers failed: ${e.message}. Using last known price: $${lastKnownSolPrice}`);
+    return lastKnownSolPrice; // Never use a fake hardcoded number, use the most recent real one
   }
 }
 
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL_MS = 1000;  // 1 second between Jupiter requests
+const MIN_REQUEST_INTERVAL_MS = 2000;  // 2 seconds between Jupiter requests to avoid 429s
 
 export async function rateLimitedRequest<T>(requestFn: (baseUrl: string) => Promise<T>, config?: any): Promise<T> {
-  const baseUrl = config?.trading?.jupiter_api_url || 'https://quote-api.jup.ag/v6';
+  const baseUrl = config?.trading?.jupiter_api_url || 'https://api.jup.ag/swap/v6';
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
 
@@ -290,16 +326,56 @@ export class AresAgent {
     }
   }
 
-  async init(): Promise<void> {
-    this.redis = await createRedisClient();
+  async init(redis?: Redis): Promise<void> {
+    if (redis) {
+      this.redis = redis;
+    } else if (!this.redis) {
+      this.redis = await createRedisClient();
+    }
     this.rateLimiter = new RateLimiter(this.redis, this.config);
     console.log('[RateLimiter] Initialized');
+    await this.syncState();
+  }
+
+  private async syncState(): Promise<void> {
+    try {
+      console.log('AGT-05: [SYNC] Synchronizing Redis state with SQLite DB...');
+      const openPositions = getOpenPositions.run();
+      const positionsKey = 'mtus:active_positions';
+      
+      // Clear current Redis set to ensure fresh sync
+      await this.redis.del(positionsKey);
+      
+      if (openPositions.length > 0) {
+        console.log(`AGT-05: [SYNC] Found ${openPositions.length} open positions in DB. Syncing to Redis...`);
+        for (const pos of openPositions) {
+          await this.redis.sadd(positionsKey, pos.position_id);
+          console.log(`AGT-05: [SYNC] Restored active position: ${pos.position_id} (${pos.mint})`);
+        }
+      } else {
+        console.log('AGT-05: [SYNC] No open positions in DB. Redis cleared.');
+      }
+    } catch (e: any) {
+      console.error(`AGT-05: [SYNC-ERROR] Failed to sync state: ${e.message}`);
+    }
   }
 
   async loadSniperWallet(passphrase: string): Promise<void> {
     const keystorePath = process.env.SNIPER_KEYSTORE_PATH || './keystores/sniper.keystore';
     this.keypair = await loadKeypairFromKeystore(keystorePath, passphrase);
     console.log(`AGT-05: Loaded Sniper Wallet: ${this.keypair.publicKey.toBase58()}`);
+    
+    // Sync with Jupiter CLI if enabled and in production
+    if (!this.isPaperMode() && this.config?.trading?.use_jupiter_cli) {
+      try {
+        const b64Key = Buffer.from(this.keypair.secretKey).toString('base64');
+        execSync(`jup config set --api-key ${process.env.JUPITER_API_KEY || ''}`);
+        execSync(`jup keys add sniper --private-key ${b64Key} --overwrite`);
+        console.log('AGT-05: [CLI] Jupiter CLI synchronized with sniper wallet');
+      } catch (e: any) {
+        console.warn(`AGT-05: [CLI WARNING] Failed to sync Jupiter CLI: ${e.message}`);
+      }
+    }
     
     // Verify keypair secret key length (should be 64 bytes for full keypair)
     console.log(`AGT-05: Keypair secret length: ${this.keypair.secretKey.length} bytes`);
@@ -372,546 +448,63 @@ export class AresAgent {
         console.log(`AGT-05: [LIVE] Balance check warning: ${e.message}`);
       }
 
+      // ==========================================
+      // JUPITER CLI EXCLUSIVE EXECUTION PATH
+      // ==========================================
       try {
-        const inputMint = 'So11111111111111111111111111111111111111112'; // 43 chars - Jupiter format
-        const amount = Math.floor((this.config?.trading?.position_size_sol || 0.0005) * 1e9);
+        const inputMint = 'So11111111111111111111111111111111111111112';
+        const amountLamports = Math.floor((this.config?.trading?.position_size_sol || 0.0005) * 1e9);
 
-        // Get actual SOL price and determine API version
-        const apiInfo = await getJupiterApiVersion((this.config?.trading?.position_size_sol || 0.0005));
-        const usdValue = apiInfo.usdValue;
+        console.log(`AGT-05: [CLI-MODE] Initializing buy via Jupiter CLI binary...`);
+        console.log(`AGT-05: [CLI-MODE] Order size: ${(this.config?.trading?.position_size_sol || 0.0005)} SOL → ${mint.slice(0, 8)}...`);
 
-        console.log(`AGT-05: [SMART ROUTING] Order value: $${usdValue.toFixed(2)} (${(this.config?.trading?.position_size_sol || 0.0005)} SOL) - Using ${apiInfo.version.toUpperCase()} API`);
-
-        let tokensReceived = 0;
-        let entryPriceSol = 0;
-        let signedTxBytes: Uint8Array | null = null;
-        let txId = '';
-        const connection = new Connection(process.env.HELIUS_RPC_URL!);
-
-        if (usdValue < 6) {
-          // ==========================================
-          // PATH 1: v1 API (fetch) for orders < $6
-          // ==========================================
-          console.log(`AGT-05: [V1-BUY] Using v1 API (<$6): ${(this.config?.trading?.position_size_sol || 0.0005)} SOL → ${mint.slice(0, 8)}...`);
-
-          // Try slippage ladder: 10% → 15% → 20%
-          let quoteData: any = null;
-          for (const slippageBps of SLIPPAGE_LADDER) {
-            console.log(`AGT-05: [V1-BUY] Requesting quote with slippage: ${slippageBps / 100}%`);
-            const quoteParams = new URLSearchParams({
-              inputMint: inputMint,
-              outputMint: mint,
-              amount: String(amount),
-              slippageBps: String(slippageBps),
-              onlyDirectRoutes: 'false',
-              asLegacyTransaction: 'false',
-            });
-
-            try {
-              const quoteUrl = `https://api.jup.ag/swap/v1/quote?${quoteParams}`;
-              console.log(`AGT-05: [V1-BUY] URL: ${quoteUrl}`);
-              
-              const quoteRes = await fetch(quoteUrl, {
-                signal: AbortSignal.timeout(10000),
-              });
-
-              const responseText = await quoteRes.text();
-              console.log(`AGT-05: [V1-BUY] Response status: ${quoteRes.status}, body: ${responseText.substring(0, 200)}`);
-              
-              if (!quoteRes.ok) throw new Error(`V1 quote failed: ${quoteRes.status}`);
-              quoteData = JSON.parse(responseText);
-
-              if (quoteData.outAmount) {
-                console.log(`AGT-05: [V1-BUY] ✅ Quote received with ${slippageBps / 100}% slippage`);
-                break;
-              }
-            } catch (e: any) {
-              console.log(`AGT-05: [V1-BUY] Quote failed with ${slippageBps / 100}% slippage: ${e.message}`);
-            }
-          }
-
-          if (!quoteData || !quoteData.outAmount) {
-            console.log(`AGT-05: [V1-BUY] ❌ No Jupiter quote with any slippage level`);
-            const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: 'No quote with slippage ladder' }, correlationId);
-            await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
-            console.log(`AGT-05: [LIVE] ========== TRADE END ==========`);
-            return;
-          }
-
-          // Fix: Pump.fun tokens have 6 decimals
+        // executeViaCli now handles the full swap using RTSE (auto-slippage)
+        const txId = await this.executeViaCli(mint, amountLamports);
+        
+        if (txId) {
+          console.log(`AGT-05: [CLI-SUCCESS] Buy confirmed. Tx: ${txId}`);
+          
+          // Post-swap: fetch quote for token estimation
+          const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${mint}&amount=${amountLamports}&slippageBps=500`;
+          const quoteRes = await fetch(quoteUrl, { headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' } });
+          const quoteData: any = await quoteRes.json();
+          
           const TOKEN_DECIMALS = 6;
-          tokensReceived = Number(quoteData.outAmount) / Math.pow(10, TOKEN_DECIMALS);
-          entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
+          const tokensReceived = Number(quoteData.outAmount || 0) / Math.pow(10, TOKEN_DECIMALS);
+          const entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
 
-          console.log(`AGT-05: [V1-BUY] ✅ Quote: ${(this.config?.trading?.position_size_sol || 0.0005)} SOL → ${tokensReceived} tokens`);
-          console.log(`AGT-05: [V1-BUY] Entry price: ${entryPriceSol} SOL per token`);
-
-          // Execute swap via v1 POST
-          console.log(`AGT-05: [V1-BUY] Building swap transaction...`);
-
-          const swapResponse: any = await rateLimitedRequest(async () => {
-            const resp = await fetch('https://api.jup.ag/swap/v1/swap', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }, // CRITICAL: Without this, Jupiter may fail to parse userPublicKey
-              body: JSON.stringify({
-                quoteResponse: quoteData,
-                userPublicKey: this.keypair!.publicKey.toBase58(),
-                wrapUnwrapSOL: true,
-                prioritizationFeeLamports: 100000,
-                maxPrioritizationFeeLamports: 100000,  // Cap at 0.001 SOL
-              }),
-              signal: AbortSignal.timeout(15000),
-            });
-
-            if (!resp.ok) throw new Error(`V1 swap failed: ${resp.status}`);
-            return resp.json();
-          });
-
-          if (!swapResponse.swapTransaction) {
-            throw new Error('No swap transaction returned');
-          }
-
-          // Deserialize and sign
-          const swapTxBase64 = swapResponse.swapTransaction;
-          const txBytes = Buffer.from(swapTxBase64, 'base64');
-          
-          // Try to deserialize as VersionedTransaction first
-          let versionedTx: VersionedTransaction | null = null;
-          let legacyTx: Transaction | null = null;
-          
-          try {
-            versionedTx = VersionedTransaction.deserialize(txBytes);
-            console.log(`AGT-05: [V1-BUY] Transaction type: Versioned (${versionedTx.message?.version || 'unknown'})`);
-          } catch (e: any) {
-            console.log(`AGT-05: [V1-BUY] Versioned parse error: ${e.message}, trying legacy...`);
-            // For legacy transactions, we need to deserialize manually
-            try {
-              legacyTx = Transaction.from(txBytes);
-              console.log(`AGT-05: [V1-BUY] Transaction type: Legacy`);
-            } catch (e2: any) {
-              console.log(`AGT-05: [V1-BUY] Legacy parse also failed: ${e2.message}`);
-            }
-          }
-          
-          if (versionedTx) {
-            // Check original blockhash - Jupiter already provides valid blockhash (DO NOT OVERWRITE - for logging only)
-            console.log(`AGT-05: [V1-BUY] Original blockhash from Jupiter: ${versionedTx.message.recentBlockhash?.slice(0, 10) || 'none'} (DO NOT OVERWRITE - for logging only)`);
-            console.log(`AGT-05: [V1-BUY] Message version: ${versionedTx.message.version}`);
-            
-            // DO NOT get fresh blockhash - Jupiter's transaction is already compiled with valid blockhash!
-            // Overwriting recentBlockhash corrupts the message buffer and invalidates the signature
-            
-            // Sign - just call sign directly without modifying signatures first
-            versionedTx.sign([this.keypair!]);
-            
-            // Verify signature length is exactly 64 bytes
-            const sigLength = versionedTx.signatures[0].length;
-            console.log(`AGT-05: [V1-BUY] Signature length: ${sigLength} bytes (must be 64)`);
-            if (sigLength !== 64) {
-              console.log(`AGT-05: [V1-BUY] ❌ CRITICAL: Signature length invalid!`);
-            }
-            
-            signedTxBytes = versionedTx.serialize();  // Use native Uint8Array
-            console.log(`AGT-05: [V1-BUY] Signed tx size: ${signedTxBytes.length} bytes`);
-            
-            // Verify by deserializing again to confirm it's valid
-            try {
-              const verifyTx = VersionedTransaction.deserialize(signedTxBytes);
-              console.log(`AGT-05: [V1-BUY] Verified: signatures=${verifyTx.signatures.length}, blockhash=${verifyTx.message.recentBlockhash?.slice(0, 10)}...`);
-            } catch (e: any) {
-              console.log(`AGT-05: [V1-BUY] Verification failed: ${e.message}`);
-            }
-          } else if (legacyTx) {
-            // Jupiter's transaction already has valid blockhash - DO NOT OVERWRITE (for logging only)
-            console.log(`AGT-05: [V1-BUY] Legacy transaction blockhash: ${legacyTx.recentBlockhash?.slice(0, 10) || 'none'} (DO NOT OVERWRITE)`);
-            
-            // Sign legacy transaction
-            legacyTx.sign(this.keypair!);
-            
-            // Legacy signatures are SignaturePubkeyPair objects - verify signature bytes
-            const legacySig = legacyTx.signatures[0].signature;
-            const legacySigLength = legacySig ? legacySig.length : 0;
-            console.log(`AGT-05: [V1-BUY] Legacy signature length: ${legacySigLength} bytes (must be 64)`);
-            
-            signedTxBytes = legacyTx.serialize();
-            console.log(`AGT-05: [V1-BUY] Signed legacy tx size: ${signedTxBytes.length} bytes`);
-          }
-          
-          console.log(`AGT-05: [V1-BUY] Wallet pubkey: ${this.keypair!.publicKey.toBase58()}`);
-
-        } else {
-          // ==========================================
-          // PATH 2: v2 API for orders >= $6
-          // ==========================================
-          console.log(`AGT-05: [V2-BUY] Using v2 API (>=$6): ${(this.config?.trading?.position_size_sol || 0.0005)} SOL → ${mint.slice(0, 8)}...`);
-
-          try {
-            // Step 1: Get quote + assembled transaction via /order
-            // NOTE: Not passing slippageBps to enable Jupiter's RTSE (Real-Time Slippage Estimator)
-            const orderUrl = 'https://api.jup.ag/swap/v2/order';
-            const orderRes = await fetch(`${orderUrl}?${new URLSearchParams({
-              inputMint: inputMint,
-              outputMint: mint,
-              amount: String(amount),
-              taker: this.keypair!.publicKey.toBase58(),
-              mode: 'fast',
-              // slippageBps removed to enable RTSE auto-slippage
-            })}`, {
-              signal: AbortSignal.timeout(10000),
-            });
-
-            if (!orderRes.ok) throw new Error(`V2 order failed: ${orderRes.status}`);
-            const orderData: any = await orderRes.json();
-
-            if (!orderData.transaction) {
-              throw new Error('V2: No transaction in order response');
-            }
-
-            // Step 2: Sign transaction
-            const txBytes = Buffer.from(orderData.transaction, 'base64');
-            const versionedTx = VersionedTransaction.deserialize(txBytes);
-            versionedTx.sign([this.keypair!]);
-            signedTxBytes = Buffer.from(versionedTx.serialize());
-
-            // Step 3: Execute via /execute (managed execution)
-            const executeRes = await fetch('https://api.jup.ag/swap/v2/execute', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                signedTransaction: Buffer.from(signedTxBytes).toString('base64'),  // Uint8Array to base64
-                requestId: orderData.requestId,
-                prioritizationFeeLamports: 100000,
-                maxPrioritizationFeeLamports: 100000,  // Cap at 0.001 SOL
-              }),
-              signal: AbortSignal.timeout(15000),
-            });
-
-            if (!executeRes.ok) throw new Error(`V2 execute failed: ${executeRes.status}`);
-            const executeData: any = await executeRes.json();
-
-            if (executeData.status === 'Success') {
-              txId = executeData.signature;
-              console.log(`AGT-05: [V2-BUY] ✅ Executed via /execute: ${txId}`);
-
-              // Fix: Calculate tokens received (v2 returns outAmount in proper units)
-              if (executeData.outAmount) {
-                const TOKEN_DECIMALS = 6;
-                tokensReceived = Number(executeData.outAmount) / Math.pow(10, TOKEN_DECIMALS);
-                entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
-              }
-            } else {
-              throw new Error(`V2 execution failed: ${JSON.stringify(executeData)}`);
-            }
-
-          } catch (v2Error: any) {
-            console.log(`AGT-05: [V2-BUY] ❌ v2 failed, falling back to v1: ${v2Error.message}`);
-
-            // FALLBACK: Try v1 API
-            console.log(`AGT-05: [FALLBACK] Using v1 API fallback...`);
-
-            const quoteParams = new URLSearchParams({
-              inputMint: inputMint,
-              outputMint: mint,
-              amount: String(amount),
-              slippageBps: String(SLIPPAGE_LADDER[0]),
-              onlyDirectRoutes: 'false',
-              asLegacyTransaction: 'false',
-            });
-
-            const quoteRes = await fetch(`https://api.jup.ag/swap/v1/quote?${quoteParams}`, {
-              signal: AbortSignal.timeout(10000),
-            });
-
-            if (!quoteRes.ok) throw new Error(`Fallback v1 quote failed: ${quoteRes.status}`);
-            const quoteData: any = await quoteRes.json();
-
-            if (!quoteData.outAmount) throw new Error('Fallback v1: No quote available');
-
-            const TOKEN_DECIMALS = 6;
-            tokensReceived = Number(quoteData.outAmount) / Math.pow(10, TOKEN_DECIMALS);
-            entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
-
-            const swapResponse = await fetch('https://api.jup.ag/swap/v1/swap', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                quoteResponse: quoteData,
-                userPublicKey: this.keypair!.publicKey.toBase58(),
-                wrapUnwrapSOL: true,
-                prioritizationFeeLamports: 100000,
-                maxPrioritizationFeeLamports: 100000,  // Cap at 0.001 SOL
-              }),
-              signal: AbortSignal.timeout(15000),
-            });
-
-            if (!swapResponse.ok) throw new Error(`Fallback v1 swap failed: ${swapResponse.status}`);
-            const swapData: any = await swapResponse.json();
-
-            if (!swapData.swapTransaction) throw new Error('Fallback v1: No transaction returned');
-
-            const txBytes = Buffer.from(swapData.swapTransaction, 'base64');
-            const versionedTx = VersionedTransaction.deserialize(txBytes);
-            versionedTx.sign([this.keypair!]);
-            signedTxBytes = Buffer.from(versionedTx.serialize());
-          }
-        }
-
-        if (!signedTxBytes) {
-          throw new Error('No signed transaction available');
-        }
-
-        // If txId not set (v1 path), broadcast via RPC
-        if (!txId) {
-          // Broadcast to RPC providers (skip empty URLs)
-          // Add public RPC as fallback
-          const RPC_PROVIDERS = [
-            { name: 'Helius', url: process.env.HELIUS_RPC_URL! },
-            { name: 'Public', url: 'https://api.mainnet-beta.solana.com' },
-            ...(process.env.QUICKNODE_RPC_URL ? [{ name: 'QuickNode', url: process.env.QUICKNODE_RPC_URL }] : []),
-            { name: 'Alchemy', url: process.env.ALCHEMY_RPC_URL! },
-          ];
-
-          console.log(`AGT-05: [LIVE] Broadcasting to ${RPC_PROVIDERS.length} RPC providers...`);
-
-          const broadcastPromises = RPC_PROVIDERS.map(async (provider) => {
-            try {
-              console.log(`AGT-05: [LIVE] Broadcasting to ${provider.name}...`);
-              const conn = new Connection(provider.url, {
-                commitment: 'confirmed',
-                confirmTransactionInitialTimeout: 60000,
-              });
-              
-              // Try with maxRetries and proper options
-              const txId = await conn.sendRawTransaction(signedTxBytes, {
-                skipPreflight: false,
-                preflightCommitment: 'processed',
-                maxRetries: 5,
-              });
-              console.log(`AGT-05: [LIVE] ${provider.name} sent tx: ${txId}`);
-              return { name: provider.name, txId, success: true };
-            } catch (e: any) {
-              console.log(`AGT-05: [LIVE] ${provider.name} failed: ${e.message}`);
-              if (e.message.includes('Simulation failed')) {
-                console.log(`AGT-05: [LIVE] ${provider.name} simulation error - trying with maxRetries...`);
-                try {
-                  const conn = new Connection(provider.url);
-                  const txId = await conn.sendRawTransaction(signedTxBytes, {
-                    skipPreflight: true,
-                    maxRetries: 5,
-                  });
-                  console.log(`AGT-05: [LIVE] ${provider.name} sent with retries: ${txId}`);
-                  return { name: provider.name, txId, success: true };
-                } catch (e2: any) {
-                  console.log(`AGT-05: [LIVE] ${provider.name} also failed: ${e2.message}`);
-                }
-              }
-              return { name: provider.name, error: e.message, success: false };
-            }
-          });
-
-          const results = await Promise.allSettled(broadcastPromises);
-
-          // Find first successful broadcast
-          let txId = '';
-          for (const result of results) {
-            if (result.status === 'fulfilled' && result.value.success && result.value.txId) {
-              txId = result.value.txId;
-              console.log(`AGT-05: [LIVE] ✅ ${result.value.name} broadcast success: ${txId}`);
-              break;
-            }
-          }
-
-          if (!txId) {
-            // All failed - check if any have pending tx
-            for (const result of results) {
-              if (result.status === 'fulfilled' && result.value.txId) {
-                txId = result.value.txId;
-                break;
-              }
-            }
-          }
-
-          if (!txId) {
-            // Try Jupiter's execute endpoint as fallback - they handle retries better
-            console.log(`AGT-05: [LIVE] Trying Jupiter /execute endpoint as fallback...`);
-            try {
-              const signedBase64 = Buffer.from(signedTxBytes).toString('base64');
-              const executeRes = await fetch('https://api.jup.ag/swap/v2/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  signedTransaction: signedBase64,
-                  requestId: `mtus-${Date.now()}`,
-                  prioritizationFeeLamports: 100000,
-                  maxPrioritizationFeeLamports: 100000,  // Cap at 0.001 SOL
-                }),
-                signal: AbortSignal.timeout(60000),
-              });
-              
-              if (executeRes.ok) {
-                const executeData: any = await executeRes.json();
-                console.log(`AGT-05: [LIVE] Jupiter execute response: ${JSON.stringify(executeData)}`);
-                if (executeData.signature) {
-                  txId = executeData.signature;
-                  console.log(`AGT-05: [LIVE] ✅ Jupiter execute success: ${txId}`);
-                }
-              } else {
-                const errText = await executeRes.text();
-                console.log(`AGT-05: [LIVE] Jupiter execute failed: ${executeRes.status} - ${errText}`);
-              }
-            } catch (e: any) {
-              console.log(`AGT-05: [LIVE] Jupiter execute error: ${e.message}`);
-            }
-          }
-
-          if (!txId) {
-            console.log(`AGT-05: [LIVE] ❌ All RPC broadcasts failed`);
-            throw new Error('All RPC providers failed to broadcast');
-          }
-
-          console.log(`AGT-05: [LIVE] Transaction broadcast successful: ${txId}`);
-
-          // Wait for confirmation using primary RPC (Helius)
-          console.log(`AGT-05: [LIVE] Waiting for confirmation (60s timeout)...`);
-          const connection = new Connection(process.env.HELIUS_RPC_URL!);
-          let confirmed = false;
-          let confirmationStatus = 'unknown';
-          const startTime = Date.now();
-          while (Date.now() - startTime < 60000) {
-            try {
-              // Use searchTransactionHistory to find the transaction
-              const status = await connection.getSignatureStatus(txId, { searchTransactionHistory: true });
-              console.log(`AGT-05: [LIVE] Signature status: ${JSON.stringify(status.value)}`);
-              confirmationStatus = status.value?.confirmationStatus || 'unknown';
-              
-              // Check for errors FIRST - even if confirmed, if there's an error, it's a failed transaction
-              const errInfo = status.value?.err || (status.value as any)?.status?.Err;
-              if (errInfo) {
-                console.log(`AGT-05: [LIVE] ❌ Transaction failed with error: ${JSON.stringify(errInfo)}`);
-                confirmed = false;
-                break;
-              }
-              
-              if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
-                confirmed = true;
-                console.log(`AGT-05: [LIVE] ✅ Transaction confirmed successfully!`);
-                break;
-              }
-            } catch (e: any) {
-              console.log(`AGT-05: [LIVE] Status check error: ${e.message}`);
-            }
-            await new Promise(r => setTimeout(r, 2000));
-          }
-
-          if (!confirmed) {
-            console.log(`AGT-05: [LIVE] ⚠️ Transaction not confirmed within 60s. Status: ${confirmationStatus}`);
-            
-            // Last resort: Try Jupiter execute endpoint
-            console.log(`AGT-05: [LIVE] Last attempt: Trying Jupiter execute endpoint...`);
-            try {
-              const signedBase64 = Buffer.from(signedTxBytes).toString('base64');
-              const executeRes = await fetch('https://api.jup.ag/swap/v2/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  signedTransaction: signedBase64,
-                  requestId: `mtus-final-${Date.now()}`,
-                  prioritizationFeeLamports: 100000,
-                  maxPrioritizationFeeLamports: 100000,  // Cap at 0.001 SOL
-                }),
-                signal: AbortSignal.timeout(90000),
-              });
-              
-              if (executeRes.ok) {
-                const executeData: any = await executeRes.json();
-                console.log(`AGT-05: [LIVE] Jupiter execute response: ${JSON.stringify(executeData)}`);
-                if (executeData.signature && (executeData.status === 'Success' || executeData.code === 0)) {
-                  txId = executeData.signature;
-                  confirmed = true;
-                  console.log(`AGT-05: [LIVE] ✅ Jupiter execute SUCCESS: ${txId}`);
-                }
-              } else {
-                const errText = await executeRes.text();
-                console.log(`AGT-05: [LIVE] Jupiter execute failed: ${executeRes.status} - ${errText}`);
-              }
-            } catch (e: any) {
-              console.log(`AGT-05: [LIVE] Jupiter execute error: ${e.message}`);
-            }
-            
-            if (!confirmed) {
-              // Don't record position if transaction failed
-              const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: 'Transaction failed: ' + confirmationStatus, txId }, correlationId);
-              await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
-              console.log(`AGT-05: [LIVE] ❌ Trade failed - not recording position`);
-              console.log(`AGT-05: [LIVE] ========== TRADE END ==========`);
-              
-              // Remove from active positions set since trade failed
-              await this.redis.srem('mtus:active_positions', correlationId);
-              return;
-            } else {
-              console.log(`AGT-05: [LIVE] ✅ Transaction confirmed successfully: ${txId}`);
-            }
-          }
-        }
-
-        // Record position with real tx signature
-        var txSignature = txId;
-
-        // Record position
-        try {
-          insertPosition.run({
+          const position = {
             position_id: correlationId,
             mint: mint,
-            token_name: 'LIVE_TOKEN',
-            token_symbol: 'LIVE',
             entry_price_sol: entryPriceSol,
-            entry_amount_sol: (this.config?.trading?.position_size_sol || 0.0005),
             tokens_received: tokensReceived,
-            entry_tx_signature: txSignature,
-            entry_timestamp_utc: new Date().toISOString(),
-            state: 'OPEN',
-            tp1_price: entryPriceSol * (this.config?.trading?.tp1_multiplier || 2.0),
-            tp2_price: entryPriceSol * (this.config?.trading?.tp2_multiplier || 5.0),
-            sl_price: entryPriceSol * (this.config?.trading?.sl_multiplier || 0.7),
+            state: 'open',
+            tp1_price: entryPriceSol * (this.config?.trading?.tp1_multiplier || 1.5),
+            tp2_price: entryPriceSol * (this.config?.trading?.tp2_multiplier || 2.0),
+            sl_price: entryPriceSol * (this.config?.trading?.sl_multiplier || 0.8),
             peak_price_sol: entryPriceSol,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
+            entry_timestamp_utc: new Date().toISOString(),
+          };
+
+          insertPosition.run(position);
           
-          // Audit log
-          insertAuditLog.run({
-            envelope_id: correlationId,
-            agent_id: 'AGT-05',
-            event_type: 'position_opened',
-            payload: { mint, entry_price_sol: entryPriceSol, tokens_received: tokensReceived, tx_signature: txSignature },
-            timestamp_utc: new Date().toISOString()
-          });
-        } catch (e) {
-          console.log(`AGT-05: [LIVE] DB insert note: ${e}`);
+          const envelope = createEnvelope('AGT-05', 'position_opened', {
+            ...position,
+            tx_signature: txId
+          }, correlationId);
+          await this.redis.publish(CHANNEL_POSITION_OPENED, JSON.stringify(envelope));
+
+          console.log(`AGT-05: [LIVE] ✅ POSITION OPENED: ${mint.slice(0, 8)} | Entry: ${entryPriceSol.toFixed(9)} SOL`);
+        } else {
+          throw new Error('CLI returned no transaction ID');
         }
-
-        const envelope = createEnvelope('AGT-05', 'position_opened', {
-          mint,
-          entry_price_sol: entryPriceSol,
-          tokens_received: tokensReceived,
-          position_size_sol: (this.config?.trading?.position_size_sol || 0.0005),
-        }, correlationId);
-        await this.redis.publish(CHANNEL_POSITION_OPENED, JSON.stringify(envelope));
-
-        // Record trade for rate limiting
-        await this.rateLimiter.recordTrade(correlationId);
-
-        console.log(`AGT-05: [LIVE] Position opened for ${mint}`);
-
-      } catch (swapError: any) {
-        console.log(`AGT-05: [LIVE] ⚠️ Swap execution failed: ${swapError.message}`);
-        // Don't record position if swap fails
-        const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: swapError.message }, correlationId);
+      } catch (e: any) {
+        console.error(`AGT-05: [CLI-FATAL] Trade aborted: ${e.message}`);
+        const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: e.message }, correlationId);
         await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
-        console.log(`AGT-05: [LIVE] ========== TRADE END ==========`);
-        return;
       }
 
+      console.log(`AGT-05: [LIVE] ========== TRADE END ==========`);
     } else {
       // PAPER MODE
       console.log(`AGT-05: [PAPER] ========== TRADE START ==========`);
@@ -919,18 +512,21 @@ export class AresAgent {
       console.log(`AGT-05: [PAPER] Position size: ${(this.config?.trading?.position_size_sol || 0.0005)} SOL`);
 
       try {
-        const inputMint = 'So11111111111111111111111111111111111111112'; // 43 chars - Jupiter format
+        const inputMint = 'So11111111111111111111111111111111111111112';
         const amount = Math.floor((this.config?.trading?.position_size_sol || 0.0005) * 1e9);
 
         // Get quote for paper trading
         const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${mint}&amount=${amount}&slippageBps=1000`;
 
         try {
-          const quoteRes = await fetch(quoteUrl, { signal: AbortSignal.timeout(10000) });
+          const quoteRes = await fetch(quoteUrl, { 
+            headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
+            signal: AbortSignal.timeout(10000) 
+          });
           if (!quoteRes.ok) throw new Error(`Quote failed: ${quoteRes.status}`);
-            const quoteData: any = await quoteRes.json();
+          const quoteData: any = await quoteRes.json();
 
-            if (quoteData.outAmount) {
+          if (quoteData.outAmount) {
             const TOKEN_DECIMALS = 6;
             const tokensReceived = Number(quoteData.outAmount) / Math.pow(10, TOKEN_DECIMALS);
             const entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
@@ -939,10 +535,21 @@ export class AresAgent {
             console.log(`AGT-05: [PAPER] Entry price: ${entryPriceSol} SOL per token`);
 
             // Record paper position
-            const envelope = createEnvelope('AGT-05', 'position_opened', {
-              mint,
+            const position = {
+              position_id: correlationId,
+              mint: mint,
               entry_price_sol: entryPriceSol,
               tokens_received: tokensReceived,
+              state: 'open',
+              tp1_price: entryPriceSol * (this.config?.trading?.tp1_multiplier || 1.1),
+              tp2_price: entryPriceSol * (this.config?.trading?.tp2_multiplier || 1.25),
+              sl_price: entryPriceSol * (this.config?.trading?.sl_multiplier || 0.95),
+              peak_price_sol: entryPriceSol,
+              entry_timestamp_utc: new Date().toISOString(),
+            };
+
+            const envelope = createEnvelope('AGT-05', 'position_opened', {
+              ...position,
               position_size_sol: (this.config?.trading?.position_size_sol || 0.0005),
             }, correlationId);
             await this.redis.publish(CHANNEL_POSITION_OPENED, JSON.stringify(envelope));
@@ -966,51 +573,90 @@ export class AresAgent {
         console.log(`AGT-05: [PAPER] Paper position opened (fallback) for ${mint}`);
 
       } catch (error: any) {
-console.log(`AGT-05: [PAPER] ❌ Paper trade failed: ${error.message}`);
+        console.log(`AGT-05: [PAPER] ❌ Paper trade failed: ${error.message}`);
         const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: error.message }, correlationId);
         await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
       }
     }
   }
 
-  stop() {
+  /**
+   * Execute a trade using the Jupiter CLI (Official Binary)
+   * This is more robust for production swaps as it handles signing and broadcasting internally.
+   */
+  private async executeViaCli(mint: string, amountLamports: number, slippageBps: number = 0): Promise<string> {
+    try {
+      console.log(`AGT-05: [CLI-SWAP] Executing (RTSE AUTO-SLIPPAGE): SOL → ${mint.slice(0, 8)}... (${amountLamports} lamports)`);
+      
+      const cmd = `jup spot swap --from SOL --to ${mint} --raw-amount ${amountLamports} --key sniper -f json`;
+      const output = execSync(cmd).toString();
+      const result = JSON.parse(output);
+      
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      return result.signature || result.txid || '';
+    } catch (e: any) {
+      console.error(`AGT-05: [CLI-ERROR] CLI swap failed: ${e.message}`);
+      throw e;
+    }
+  }
+
+  async stop(): Promise<void> {
     this.running = false;
+    if (this.redis) {
+      try {
+        await this.redis.quit();
+      } catch (e) {
+        // Ignore quit errors
+      }
+    }
   }
 
 async run(): Promise<void> {
     this.running = true;
     console.log(`AGT-05: [STARTED] Ares Agent running...`);
 
-    // Subscribe to trade_approved for executed trades from Anansi
-    const subscriber = this.redis.duplicate();
-    
-    subscriber.on('message', async (channel: string, message: string) => {
-      if (channel !== CHANNEL_TRADE_APPROVED) return;
-      
-      try {
-        const envelope = JSON.parse(message) as AgentMessageEnvelope;
-        if (envelope.agent_id === 'AGT-05') return;
-
-        // Execute trade directly when trade_approved arrives from Anansi
-        // No queue dequeue - Hermes already processed the queue and Anansi approved it
-        console.log(`AGT-05: [EVENT] Received trade_approved for ${envelope.payload?.mint?.slice(0, 8) || envelope.payload?.token?.mint?.slice(0, 8)}...`);
-        const mint = envelope.payload?.token?.mint || envelope.payload?.mint;
-        const isPump = envelope.payload?.is_pump || false;
-        await this.executeTrade(mint, envelope.correlation_id, isPump);
-      } catch (e: any) {
-        console.log(`AGT-05: [ERROR] Error processing event: ${e.message}`);
-      }
-    });
-
-    await subscriber.subscribe(CHANNEL_TRADE_APPROVED);
-    console.log(`AGT-05: Subscribed to trade_approved channel`);
-
-    // Keep running
+    // Poll the trade_approved queue instead of using direct PubSub
+    // This allows the system to hold qualified tokens in queue when max positions are reached
     while (this.running) {
-      await new Promise(r => setTimeout(r, 1000));
-    }
+      try {
+        const { allowed } = await this.rateLimiter.canTrade();
+        
+        if (!allowed) {
+          // If we can't trade (e.g., max positions reached), wait before checking again
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
 
-    await subscriber.quit();
+        // We have a slot! Wait for an item in the queue (blocking pop for 2 seconds)
+        // Anansi uses lpush to "event:trade_approved:0"
+        const result = await this.redis.brpop('event:trade_approved:0', 2);
+        
+        if (result) {
+          const [queueName, message] = result;
+          const envelope = JSON.parse(message) as AgentMessageEnvelope;
+          
+          if (envelope.agent_id !== 'AGT-05') {
+            console.log(`AGT-05: [QUEUE] Dequeued trade_approved for ${envelope.payload?.mint?.slice(0, 8) || envelope.payload?.token?.mint?.slice(0, 8)}...`);
+            const mint = envelope.payload?.token?.mint || envelope.payload?.mint;
+            const isPump = envelope.payload?.is_pump || false;
+            
+            // Execute trade
+            await this.executeTrade(mint, envelope.correlation_id, isPump);
+          }
+        }
+      } catch (e: any) {
+        console.log(`AGT-05: [ERROR] Error in queue polling: ${e.message}`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    if (this.redis) {
+      try {
+        // cleanup if needed
+      } catch (e) {}
+    }
   }
 }
 

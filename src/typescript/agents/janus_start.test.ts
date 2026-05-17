@@ -1,10 +1,5 @@
-import * as passphrase from '../shared/passphrase';
-
 jest.mock('./janus');
 jest.mock('../shared/passphrase');
-jest.mock('../shared/config_validator', () => ({
-    validateConfigAtStartup: jest.fn()
-}));
 
 describe('janus_start Entry Point', () => {
     let exitSpy: jest.SpyInstance;
@@ -12,10 +7,7 @@ describe('janus_start Entry Point', () => {
     beforeEach(() => {
         jest.resetModules();
         jest.clearAllMocks();
-        exitSpy = jest.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined): never => {
-            throw new Error(`Process.exit called with ${code}`);
-        });
-        
+        exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => { throw new Error('Process.exit'); }) as any);
         process.env.SNIPER_PASSPHRASE = 'test-pass';
         process.env.MAIN_PASSPHRASE = 'test-pass-2';
         (process.stdin as any).isTTY = true;
@@ -29,35 +21,39 @@ describe('janus_start Entry Point', () => {
     test('successfully starts janus agent', async () => {
         const { JanusAgent } = require('./janus');
         const { readPassphraseStdin } = require('../shared/passphrase');
-        
-        const mockAgentInstance = {
-            loadWallets: jest.fn().mockResolvedValue(undefined),
-            run: jest.fn().mockResolvedValue(undefined),
-            stop: jest.fn()
-        };
-        JanusAgent.mockImplementation(() => mockAgentInstance);
+        const mockAgent = { init: jest.fn().mockResolvedValue(undefined), loadWallets: jest.fn().mockResolvedValue(undefined), run: jest.fn().mockResolvedValue(undefined), stop: jest.fn() };
+        JanusAgent.mockImplementation(() => mockAgent);
         readPassphraseStdin.mockResolvedValue('user-pass');
-
         const { janusMain } = require('./janus_start');
         await janusMain();
-
-        expect(mockAgentInstance.loadWallets).toHaveBeenCalledWith('user-pass', 'user-pass');
-        expect(mockAgentInstance.run).toHaveBeenCalled();
+        expect(mockAgent.loadWallets).toHaveBeenCalledWith('user-pass', 'user-pass');
+        expect(mockAgent.run).toHaveBeenCalled();
     });
 
     test('fails if wallet load fails', async () => {
         const { JanusAgent } = require('./janus');
-        const mockAgentInstance = {
-            loadWallets: jest.fn().mockRejectedValue(new Error('Decrypt fail')),
-            run: jest.fn(),
-        };
-        JanusAgent.mockImplementation(() => mockAgentInstance);
-
+        const mockAgent = { init: jest.fn().mockResolvedValue(undefined), loadWallets: jest.fn().mockRejectedValue(new Error('Decrypt fail')), run: jest.fn() };
+        JanusAgent.mockImplementation(() => mockAgent);
         const { janusMain } = require('./janus_start');
-        try {
-            await janusMain();
-        } catch (e) {}
+        try { await janusMain(); } catch (e) {}
+        expect(exitSpy).toHaveBeenCalledWith(1);
+    });
 
+    test('handles init failure', async () => {
+        const { JanusAgent } = require('./janus');
+        const mockAgent = { init: jest.fn().mockRejectedValue(new Error('init failed')), loadWallets: jest.fn(), run: jest.fn() };
+        JanusAgent.mockImplementation(() => mockAgent);
+        const { janusMain } = require('./janus_start');
+        try { await janusMain(); } catch (e) {}
+        expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    test('handles init failure', async () => {
+        const { JanusAgent } = require('./janus');
+        const mockAgent = { init: jest.fn().mockRejectedValue(new Error('init failed')), loadWallets: jest.fn(), run: jest.fn() };
+        JanusAgent.mockImplementation(() => mockAgent);
+        const { janusMain } = require('./janus_start');
+        try { await janusMain(); } catch (e) {}
         expect(exitSpy).toHaveBeenCalledWith(1);
     });
 });

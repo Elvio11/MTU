@@ -46,7 +46,7 @@ class TestAgentMessageFlows(unittest.TestCase):
         from src.python.agents.nofx import NofxAgent
 
         with patch("src.python.agents.nofx.NofxAgent"):
-            agent = NofxAgent()
+            agent = NofxAgent({})
             agent.redis = MagicMock()
             agent.redis.publish = AsyncMock()
 

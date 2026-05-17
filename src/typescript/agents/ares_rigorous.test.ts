@@ -24,6 +24,7 @@ jest.mock('ioredis', () => {
   MockRedis.prototype.get = jest.fn().mockImplementation(MockRedis.prototype.get);
   MockRedis.prototype.set = jest.fn().mockImplementation(MockRedis.prototype.set);
   MockRedis.prototype.quit = jest.fn().mockImplementation(MockRedis.prototype.quit);
+  MockRedis.prototype.del = jest.fn().mockResolvedValue(1);
   MockRedis.prototype.scard = jest.fn().mockResolvedValue(0);
   MockRedis.prototype.incr = jest.fn().mockResolvedValue(1);
   MockRedis.prototype.expire = jest.fn().mockResolvedValue(1);
@@ -70,6 +71,16 @@ jest.mock('@solana/web3.js', () => {
   };
 });
 
+// Mock child_process for Jupiter CLI
+jest.mock('child_process', () => ({
+  execSync: jest.fn().mockImplementation((cmd: string) => {
+    if (cmd.includes('jup spot swap')) {
+      return Buffer.from(JSON.stringify({ signature: 'mock_tx_signature' }));
+    }
+    return Buffer.from('ok');
+  }),
+}));
+
 // Mock shared modules
 jest.mock('../shared/keystore', () => ({
   loadKeypairFromKeystore: jest.fn(),
@@ -79,6 +90,7 @@ jest.mock('../shared/db', () => ({
   insertPosition: { run: jest.fn() },
   updatePosition: { run: jest.fn() },
   insertAuditLog: { run: jest.fn() },
+  getOpenPositions: { run: jest.fn().mockReturnValue([]) },
   shutdownDB: jest.fn(),
 }));
 
@@ -281,8 +293,11 @@ describe('AresAgent Rigorous Tests', () => {
     });
     await agent.loadSniperWallet('passphrase');
 
-    // Force V2 /order to fail
-    (global as any).fetch.mockImplementationOnce(() => Promise.resolve({ ok: false, status: 500 }));
+    // Mock quote fetch response
+    (global as any).fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ outAmount: '1000000' })
+    });
 
     const mint = 'TokenMint11111111111111111111111111111111111';
     await agent.executeTrade(mint, 'fallback-corr-1');

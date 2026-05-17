@@ -81,4 +81,13 @@ describe('ares_start Entry Point', () => {
 
         expect(mockAgentInstance.loadSniperWallet).toHaveBeenCalledWith('env-pass');
     });
+
+    test('handles init failure', async () => {
+        const { AresAgent } = require('./ares');
+        const mockAgent = { init: jest.fn().mockRejectedValue(new Error('init failed')), loadSniperWallet: jest.fn(), run: jest.fn() };
+        AresAgent.mockImplementation(() => mockAgent);
+        const { aresMain } = require('./ares_start');
+        try { await aresMain(); } catch (e) {}
+        expect(exitSpy).toHaveBeenCalledWith(1);
+    });
 });

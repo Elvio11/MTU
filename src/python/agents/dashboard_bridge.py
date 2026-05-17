@@ -28,7 +28,7 @@ class DashboardBridge:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-        self.ws_port = 3001
+        self.ws_port = 4001
         self.clients = set()
         self.redis = None
         self.pubsub = None

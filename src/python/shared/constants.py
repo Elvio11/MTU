@@ -66,6 +66,7 @@ CHANNEL_TOKEN_RECEIVED_SOCIAL = f"{MTUS_CHANNEL_PREFIX}token_received_social"
 CHANNEL_TOKEN_QUALIFIED = f"{MTUS_CHANNEL_PREFIX}token_qualified"
 CHANNEL_TOKEN_GRADATED = f"{MTUS_CHANNEL_PREFIX}token_gradated"
 CHANNEL_TOKEN_MIGRATED = f"{MTUS_CHANNEL_PREFIX}token_migrated"
+CHANNEL_TOKEN_TA_SCORED = f"{MTUS_CHANNEL_PREFIX}token_ta_scored"
 
 # Trade Channels
 CHANNEL_TRADE_APPROVED = f"{MTUS_CHANNEL_PREFIX}trade_approved"
@@ -135,6 +136,7 @@ EVENT_PRICE_UNAVAILABLE = "price_unavailable"
 EVENT_TOKEN_RECEIVED_SOCIAL = "token_received_social"
 EVENT_SOCIAL_SCORED = "social_scored"
 EVENT_KILL_SWITCH_TRIGGERED = "kill_switch_triggered"
+EVENT_TOKEN_TA_SCORED = "token_ta_scored"
 EVENT_TOKEN_MIGRATED = "token_migrated"
 
 

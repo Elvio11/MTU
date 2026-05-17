@@ -1,115 +1,90 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { renderHook } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import React, { Component, ReactNode } from 'react';
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import React from 'react';
 
-class TestErrorBoundary extends Component<
-  { children: ReactNode },
-  { hasError: boolean; error: Error | null }
-> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
+vi.mock('@/lib/theme-context', () => ({
+  ThemeProvider: ({ children }: any) => <>{children}</>,
+  useTheme: () => ({ theme: 'dark', setTheme: vi.fn(), resolvedTheme: 'dark' }),
+}));
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
+vi.mock('@/lib/admin-context', () => ({
+  AdminProvider: ({ children }: any) => <>{children}</>,
+  useAdmin: () => ({ isAdmin: false, isAdminMode: false, enableAdmin: vi.fn(), disableAdmin: vi.fn(), requiresOTP: vi.fn() }),
+}));
 
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div data-testid="error-fallback">
-          <h1>Something went wrong</h1>
-          <p>{this.state.error?.message || 'An unexpected error occurred'}</p>
-          <button>Reload Dashboard</button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
+vi.mock('@/lib/websocket', () => ({
+  WebSocketProvider: ({ children }: any) => <>{children}</>,
+  useWebSocket: () => null,
+}));
 
-describe('ErrorBoundary', () => {
-  it('should render children when no error', () => {
-    const { container } = render(
-      <TestErrorBoundary>
-        <div data-testid="child">Test Child</div>
-      </TestErrorBoundary>
-    );
+vi.mock('@/lib/binance-websocket', () => ({
+  BinanceProvider: ({ children }: any) => <>{children}</>,
+  useBinance: () => ({ tickers: new Map(), connected: false, refreshStats: vi.fn() }),
+}));
 
+let Providers: any;
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  Providers = (await import('./providers')).default;
+});
+
+describe('Providers', () => {
+  it('renders children', () => {
+    render(React.createElement(Providers, null, React.createElement('div', { 'data-testid': 'child' }, 'hello')));
     expect(screen.getByTestId('child')).toBeInTheDocument();
-  });
-
-  it('should show error fallback when error occurs', () => {
-    const ThrowError = () => {
-      throw new Error('Test error');
-    };
-
-    render(
-      <TestErrorBoundary>
-        <ThrowError />
-      </TestErrorBoundary>
-    );
-
-    expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
-  });
-
-  it('should display error message', () => {
-    const ThrowError = () => {
-      throw new Error('Custom error message');
-    };
-
-    render(
-      <TestErrorBoundary>
-        <ThrowError />
-      </TestErrorBoundary>
-    );
-
-    expect(screen.getByText(/Custom error message/i)).toBeInTheDocument();
-  });
-
-  it('should have reload button in fallback', () => {
-    const ThrowError = () => {
-      throw new Error('Test');
-    };
-
-    render(
-      <TestErrorBoundary>
-        <ThrowError />
-      </TestErrorBoundary>
-    );
-
-    expect(screen.getByText(/Reload Dashboard/i)).toBeInTheDocument();
-  });
-});
-
-describe('NetworkStatusProvider', () => {
-  let addEventListenerSpy: ReturnType<typeof vi.spyOn>;
-  let removeEventListenerSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    addEventListenerSpy = vi.spyOn(window, 'addEventListener');
-    removeEventListenerSpy = vi.spyOn(window, 'removeEventListener');
-  });
-
-  afterEach(() => {
     cleanup();
-    addEventListenerSpy.mockRestore();
-    removeEventListenerSpy.mockRestore();
   });
 
-it('should have addEventListener method available', () => {
-    expect(typeof window.addEventListener).toBe('function');
-    expect(typeof window.removeEventListener).toBe('function');
+  it('renders without crashing', () => {
+    render(React.createElement(Providers, null, React.createElement('span', null, 'test')));
+    expect(screen.getByText('test')).toBeInTheDocument();
   });
-});
 
-describe('ErrorBoundary getDerivedStateFromError', () => {
-  it('should return error state', () => {
-    const error = new Error('Test error');
-    const state = TestErrorBoundary.getDerivedStateFromError(error);
-    expect(state).toEqual({ hasError: true, error });
+  it('catches errors via ErrorBoundary', () => {
+    const ThrowError = () => { throw new Error('Boundary test error'); };
+    render(React.createElement(Providers, null, React.createElement(ThrowError)));
+    expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
+    expect(screen.getByText('Boundary test error')).toBeInTheDocument();
+    expect(screen.getByText('Reload Dashboard')).toBeInTheDocument();
+  });
+
+  it('shows offline banner when navigator goes offline', () => {
+    render(React.createElement(Providers, null, React.createElement('div', { 'data-testid': 'child' }, 'hello')));
+    expect(screen.queryByText(/You are offline/i)).not.toBeInTheDocument();
+    act(() => { window.dispatchEvent(new Event('offline')); });
+    expect(screen.getByText(/You are offline/i)).toBeInTheDocument();
+  });
+
+  it('hides offline banner when navigator comes back online', () => {
+    render(React.createElement(Providers, null, React.createElement('div', { 'data-testid': 'child' }, 'hello')));
+    act(() => { window.dispatchEvent(new Event('offline')); });
+    expect(screen.getByText(/You are offline/i)).toBeInTheDocument();
+    act(() => { window.dispatchEvent(new Event('online')); });
+    expect(screen.queryByText(/You are offline/i)).not.toBeInTheDocument();
+  });
+
+  it('dismisses offline banner on dismiss button click', () => {
+    render(React.createElement(Providers, null, React.createElement('div', { 'data-testid': 'child' }, 'hello')));
+    act(() => { window.dispatchEvent(new Event('offline')); });
+    expect(screen.getByText(/Dismiss/i)).toBeInTheDocument();
+    act(() => { fireEvent.click(screen.getByText(/Dismiss/i)); });
+    expect(screen.queryByText(/You are offline/i)).not.toBeInTheDocument();
+  });
+
+  it('shows offline from initial state when navigator.onLine is false', () => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+    render(React.createElement(Providers, null, React.createElement('div', { 'data-testid': 'child' }, 'hello')));
+    expect(screen.getByText(/You are offline/i)).toBeInTheDocument();
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+  });
+
+  it('ErrorBoundary reload button calls window.location.reload', () => {
+    const reloadSpy = vi.fn();
+    Object.defineProperty(window, 'location', { value: { reload: reloadSpy }, writable: true });
+    const ThrowError = () => { throw new Error('reload test'); };
+    render(React.createElement(Providers, null, React.createElement(ThrowError)));
+    fireEvent.click(screen.getByText('Reload Dashboard'));
+    expect(reloadSpy).toHaveBeenCalled();
   });
 });

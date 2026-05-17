@@ -24,6 +24,10 @@ export const isOperationalWindowActive = (): boolean => {
   const istTime = now.setZone('Asia/Kolkata');
   const currentHour = istTime.hour;
 
+  if (start === end) {
+    return true; // 24/7
+  }
+
   if (start === 0 && end === 24) {
     return true;
   }

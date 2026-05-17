@@ -135,17 +135,12 @@ describe('JanusAgent Coverage Tests', () => {
     
     const sweepSpy = jest.spyOn(agent as any, 'sweepProfits').mockResolvedValue(undefined);
     
-    // Set running to true so we can enter the loop, but then immediately set it to false
     const runPromise = agent.run();
     
-    // Give it a tiny bit of time to start the iteration
-    await new Promise(r => setTimeout(r, 10));
-    
-    // Stop it
+    // Advance timers to allow first loop iteration to complete
+    await jest.advanceTimersByTimeAsync(100);
     agent['running'] = false;
-    
-    // Advance timers if it's stuck in setTimeout
-    jest.runOnlyPendingTimers();
+    await jest.advanceTimersByTimeAsync(61000);
     
     await runPromise;
     

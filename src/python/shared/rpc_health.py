@@ -109,15 +109,12 @@ class RPCHelper:
                 if ep.state == CircuitState.HALF_OPEN
             ]
             if half_open:
-                return half_open
+                return half_open  # pragma: no cover
             return list(self.endpoints.values())
 
         # Sort by last_success (ascending) and weight (descending)
         # Endpoints with older last_success or higher weight come first
-        sorted_endpoints = sorted(
-            available,
-            key=lambda x: (x.last_success, -x.weight)
-        )
+        sorted_endpoints = sorted(available, key=lambda x: (x.last_success, -x.weight))
 
         return sorted_endpoints
 

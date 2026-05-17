@@ -12,7 +12,9 @@ export const verifyOTP = (seed: string, otp: string, window: number = 1): boolea
   for (let delta = -window; delta <= window; delta++) {
     const testWindow = currentWindow + delta;
     const testOtp = crypto.createHmac('sha256', seed).update(testWindow.toString()).digest('hex').substring(0, 8);
-    if (crypto.timingSafeEqual(Buffer.from(testOtp, 'hex'), Buffer.from(otp, 'hex'))) {
+    const testOtpBuf = Buffer.from(testOtp, 'hex');
+    const otpBuf = Buffer.from(otp, 'hex');
+    if (testOtpBuf.length === otpBuf.length && crypto.timingSafeEqual(testOtpBuf, otpBuf)) {
       return true;
     }
   }

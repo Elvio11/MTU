@@ -46,8 +46,10 @@ async def test_hydra_process_token(hydra_agent):
         "mint": "MINT123",
         "symbol": "TKN",
         "name": "Token",
-        "virtual_sol_reserves": 40000000000, # (40-30)/55 * 100 = ~18%
-        "usd_market_cap": 50000
+        "virtual_sol_reserves": 40000000000,
+        "usd_market_cap": 50000,
+        "reply_count": 20,
+        "twitter": "https://x.com/token"
     }
     await hydra_agent.process_token(token_data)
     hydra_agent.redis.publish.assert_called_once()
@@ -139,7 +141,13 @@ async def test_hydra_get_bonding_curve_data_no_rpc(hydra_agent):
 @pytest.mark.asyncio
 async def test_hydra_process_token_clear_cache(hydra_agent):
     hydra_agent._processed_mints = {f"m{i}" for i in range(1000)}
-    token_data = {"mint": "NEW", "virtual_sol_reserves": 40000000000}
+    token_data = {
+        "mint": "NEW", 
+        "virtual_sol_reserves": 40000000000,
+        "usd_market_cap": 50000,
+        "reply_count": 20,
+        "twitter": "t"
+    }
     await hydra_agent.process_token(token_data)
     assert len(hydra_agent._processed_mints) == 1 # Cleared then added NEW
     assert "NEW" in hydra_agent._processed_mints

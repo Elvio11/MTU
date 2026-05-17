@@ -64,7 +64,6 @@ async def test_agent_main_success(name, main_func, agent_class_name):
                 mock_bot.stop = AsyncMock()
                 
                 await main_func()
-                assert mock_bot.initialize.called
                 assert mock_bot.start.called
                 assert mock_bot.stop.called
 

@@ -177,10 +177,12 @@ class LedgerAgent:
                     await asyncio.sleep(60)
                     continue
 
-                message = await self.pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
-                )
-                if message:
+                if self.pubsub is None:
+                    await self.connect_redis()
+                    is_subscribed = True
+
+                message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message.get("type") == "message":
                     await self.handle_event(message["channel"], message["data"])
                 await asyncio.sleep(0.01)
             except Exception as e:

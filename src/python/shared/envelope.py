@@ -46,6 +46,7 @@ EventType = Literal[
     "kill_switch_triggered",
     "token_migrated",
     "token_activity",
+    "token_ta_scored",
 ]
 
 

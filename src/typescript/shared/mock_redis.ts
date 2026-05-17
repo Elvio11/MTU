@@ -120,7 +120,10 @@ class MockRedis extends EventEmitter {
   }
   
   async quit(): Promise<void> {
-    // Clear all subscriptions
+    // Remove all subscriptions from the shared store
+    this.subscribedChannels.forEach((cb, channel) => {
+      this.store.unsubscribe(channel, cb);
+    });
     this.subscribedChannels.clear();
     console.log('[MockRedis] Disconnected');
   }

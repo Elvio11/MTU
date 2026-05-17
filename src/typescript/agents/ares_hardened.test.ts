@@ -143,11 +143,11 @@ describe('AresAgent Hardened Coverage', () => {
 
   test('isPaperMode returns correct value based on environment', () => {
     process.env.MTUS_ENVIRONMENT = 'paper';
-    expect(AresAgent.isPaperMode()).toBe(true);
+    expect((agent as any).isPaperMode()).toBe(true);
     process.env.MTUS_ENVIRONMENT = 'production';
-    expect(AresAgent.isPaperMode()).toBe(false);
+    expect((agent as any).isPaperMode()).toBe(false);
     process.env.MTUS_ENVIRONMENT = '';
-    expect(AresAgent.isPaperMode()).toBe(true); // default
+    expect((agent as any).isPaperMode()).toBe(true); // default
   });
 
   test('executeTrade uses dynamic size from Redis', async () => {

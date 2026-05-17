@@ -19,7 +19,7 @@ export interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
-class MTUSWebSocket {
+export class MTUSWebSocket {
   private ws: WebSocket | null = null;
   private listeners: Map<string, Array<(payload: unknown) => void>> = new Map();
   private url: string;
@@ -35,7 +35,7 @@ class MTUSWebSocket {
 
   constructor(url?: string) {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL;
-    this.url = wsUrl || url || 'ws://localhost:3001';
+    this.url = wsUrl || url || 'ws://localhost:4001';
   }
 
   setAuthToken(token: string | null) {

@@ -1,20 +1,30 @@
+@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap');
+
 @import "tailwindcss";
 
 @theme {
   --color-mtus-bg: #0f172a;
-  --color-mtus-card: #1e293b;
-  --color-mtus-accent: #3b82f6;
+  --color-mtus-card: rgba(30, 41, 59, 0.7);
+  --color-mtus-accent: #f59e0b;
+  --color-mtus-secondary: #8b5cf6;
   --color-profit: #22c55e;
   --color-loss: #ef4444;
   --color-warning: #f59e0b;
-  --color-muted: #64748b;
+  --color-muted: #94a3b8;
+  
+  --font-heading: 'Orbitron', sans-serif;
+  --font-body: 'Exo 2', sans-serif;
 }
 
 /* Dark theme (default) */
 body {
   background-color: var(--color-mtus-bg);
-  color: #ededed;
-  font-family: system-ui, -apple-system, sans-serif;
+  color: #f8fafc;
+  font-family: var(--font-body);
+}
+
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-heading);
 }
 
 /* Light theme */

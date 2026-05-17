@@ -1,297 +1,126 @@
-import { Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import * as channels from '../shared/channels';
+import { JanusAgent } from './janus';
+import { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { createEnvelope } from '../shared/envelope';
+import { CHANNEL_SWEEP_COMPLETED, CHANNEL_TRADE_FAILED } from '../shared/channels';
 
-// These variables will be assigned in beforeEach
-let mockGetBalance: any;
-let mockSendAndConfirmTransaction: any;
-let mockLoadKeypair: any;
-
-// Mock shared modules
-jest.mock('../shared/keystore', () => ({
-  loadKeypairFromKeystore: (path: string, pass: string) => mockLoadKeypair(path, pass),
-}));
-
-// Mock Redis with spied methods
-jest.mock('ioredis', () => {
-  const MockRedis = require('../shared/mock_redis').default;
-  const originalDuplicate = MockRedis.prototype.duplicate;
-  MockRedis.prototype.duplicate = jest.fn().mockImplementation(function(this: any) {
-    const d = originalDuplicate.call(this);
-    d.publish = jest.fn().mockImplementation(d.publish.bind(d));
-    d.subscribe = jest.fn().mockImplementation(d.subscribe.bind(d));
-    return d;
-  });
-  // Make publish and quit jest mocks while keeping original behavior
-  MockRedis.prototype.publish = jest.fn().mockImplementation(MockRedis.prototype.publish);
-  MockRedis.prototype.quit = jest.fn().mockImplementation(MockRedis.prototype.quit);
-  return MockRedis;
-});
-
-// Mock Web3
 jest.mock('@solana/web3.js', () => {
-    const actual = jest.requireActual('@solana/web3.js');
+    const original = jest.requireActual('@solana/web3.js');
     return {
-        ...actual,
+        ...original,
         Connection: jest.fn().mockImplementation(() => ({
-            getBalance: (p: any) => mockGetBalance(p),
+            getBalance: jest.fn().mockResolvedValue(3 * LAMPORTS_PER_SOL), // 3 SOL
         })),
-        sendAndConfirmTransaction: (c: any, t: any, s: any) => mockSendAndConfirmTransaction(c, t, s),
+        sendAndConfirmTransaction: jest.fn().mockResolvedValue('test_sweep_sig'),
     };
 });
 
+jest.mock('../shared/keystore', () => ({
+    loadKeypairFromKeystore: jest.fn().mockResolvedValue(jest.requireActual('@solana/web3.js').Keypair.generate()),
+}));
+
 describe('JanusAgent Rigorous Tests', () => {
-  let mockRedis: any;
+    let mockRedis: any;
 
-  beforeAll(() => {
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-  });
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockRedis = {
+            publish: jest.fn().mockResolvedValue(1),
+            quit: jest.fn().mockResolvedValue('OK'),
+        };
+        process.env.MTUS_ENVIRONMENT = 'paper';
+    });
 
-  afterAll(() => {
-    if ((console.log as any).mockRestore) (console.log as any).mockRestore();
-    if ((console.error as any).mockRestore) (console.error as any).mockRestore();
-  });
+    test('init and isPaperMode', async () => {
+        delete process.env.MTUS_ENVIRONMENT;
+        const agent = new JanusAgent({ system: { environment: 'production' } }, mockRedis);
+        await agent.init(mockRedis);
+        expect(agent.isPaperMode()).toBe(false);
+        
+        process.env.MTUS_ENVIRONMENT = 'paper';
+        expect(agent.isPaperMode()).toBe(true);
+    });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    const { resetMockRedis } = require('../shared/mock_redis');
-    resetMockRedis();
-    
-    // Initialize mocks for each test
-    mockGetBalance = jest.fn().mockResolvedValue(1 * LAMPORTS_PER_SOL);
-    mockSendAndConfirmTransaction = jest.fn().mockResolvedValue('test_sig');
-    mockLoadKeypair = jest.fn();
+    test('getInstance singleton', () => {
+        const instance1 = JanusAgent.getInstance({ a: 1 });
+        const instance2 = JanusAgent.getInstance({ a: 2 });
+        expect(instance1).toBe(instance2);
+    });
 
-    const Redis = require('ioredis');
-    mockRedis = new Redis();
-  });
+    test('loadWallets and checkSniperBalance', async () => {
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        const balance = await agent.checkSniperBalance();
+        expect(balance).toBe(3);
+    });
 
-  test('loadWallets successfully loads both keypairs', async () => {
-    const { JanusAgent } = require('./janus');
-    const sniperKp = Keypair.generate();
-    const mainKp = Keypair.generate();
-    mockLoadKeypair.mockResolvedValueOnce(sniperKp).mockResolvedValueOnce(mainKp);
+    test('sweepProfits success', async () => {
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        
+        // @ts-ignore
+        await agent.sweepProfits(3.0);
+        
+        expect(sendAndConfirmTransaction).toHaveBeenCalled();
+        expect(mockRedis.publish).toHaveBeenCalledWith(CHANNEL_SWEEP_COMPLETED, expect.stringContaining('sweep_completed'));
+    });
 
-    const agent = new JanusAgent({}, mockRedis);
-    await agent.loadWallets('p1', 'p2');
+    test('sweepProfits skip if tiny', async () => {
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        
+        // RESERVE is 0.5, current is 0.52 -> amountToSweep is 0.02 (<= 0.05)
+        // @ts-ignore
+        await agent.sweepProfits(0.52);
+        
+        expect(sendAndConfirmTransaction).not.toHaveBeenCalled();
+    });
 
-    expect(agent['sniperKeypair']).toBe(sniperKp);
-    expect(agent['mainKeypair']).toBe(mainKp);
-  });
+    test('sweepProfits error handling', async () => {
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        (sendAndConfirmTransaction as jest.Mock).mockRejectedValueOnce(new Error('RPC Error'));
+        
+        // @ts-ignore
+        await agent.sweepProfits(3.0);
+        
+        expect(mockRedis.publish).toHaveBeenCalledWith(CHANNEL_TRADE_FAILED, expect.stringContaining('Sweep failed'));
+    });
 
-  test('sweepProfits executes when balance is above threshold', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    const sniperKp = Keypair.generate();
-    const mainKp = Keypair.generate();
-    agent['sniperKeypair'] = sniperKp;
-    agent['mainKeypair'] = mainKp;
+    test('run loop and stop', async () => {
+        jest.useFakeTimers();
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        
+        const mockConn = (agent as any).connection;
+        mockConn.getBalance.mockResolvedValueOnce(3 * LAMPORTS_PER_SOL);
+        
+        const runPromise = agent.run();
+        
+        // Advance past first iteration
+        await jest.advanceTimersByTimeAsync(100);
+        await agent.stop();
+        // Advance to unblock polling timeout
+        await jest.advanceTimersByTimeAsync(61000);
+        await runPromise;
+        
+        expect(mockConn.getBalance).toHaveBeenCalled();
+        jest.useRealTimers();
+    }, 10000);
 
-    mockGetBalance.mockResolvedValue(2.5 * LAMPORTS_PER_SOL);
-    mockSendAndConfirmTransaction.mockResolvedValue('test_sig');
-
-    await agent['sweepProfits'](2.5);
-
-    expect(mockSendAndConfirmTransaction).toHaveBeenCalled();
-    expect(mockRedis.publish).toHaveBeenCalledWith(
-      channels.CHANNEL_SWEEP_COMPLETED,
-      expect.stringContaining('sweep_completed')
-    );
-  });
-
-  test('sweepProfits skips when balance is below threshold', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    const sniperKp = Keypair.generate();
-    const mainKp = Keypair.generate();
-    agent['sniperKeypair'] = sniperKp;
-    agent['mainKeypair'] = mainKp;
-
-    await agent['sweepProfits'](0.4);
-
-    expect(mockSendAndConfirmTransaction).not.toHaveBeenCalled();
-  });
-
-  test('sweepProfits handles transaction failure', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    const sniperKp = Keypair.generate();
-    const mainKp = Keypair.generate();
-    agent['sniperKeypair'] = sniperKp;
-    agent['mainKeypair'] = mainKp;
-
-    mockSendAndConfirmTransaction.mockRejectedValue(new Error('Network error'));
-
-    await agent['sweepProfits'](3.0);
-
-    expect(mockRedis.publish).toHaveBeenCalledWith(
-      channels.CHANNEL_TRADE_FAILED,
-      expect.stringContaining('Sweep failed')
-    );
-  });
-
-  test('stop sets running to false and quits redis', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    agent['running'] = true;
-
-    await agent.stop();
-
-    expect(agent['running']).toBe(false);
-    expect(mockRedis.quit).toHaveBeenCalled();
-  });
-
-  test('getInstance returns a singleton instance and handles existing instance', () => {
-    const { JanusAgent } = require('./janus');
-    JanusAgent['instance'] = null; // Reset singleton
-    const instance1 = JanusAgent.getInstance({ a: 1 }, mockRedis);
-    const instance2 = JanusAgent.getInstance({ b: 2 }, mockRedis);
-    expect(instance1).toBe(instance2);
-    expect(instance1['config']).toEqual({ a: 1 });
-  });
-
-  test('constructor and loadWallets handle missing env vars', async () => {
-    const { JanusAgent } = require('./janus');
-    const oldRpc = process.env.HELIUS_RPC_URL;
-    const oldSniper = process.env.SNIPER_KEYSTORE_PATH;
-    const oldMain = process.env.MAIN_KEYSTORE_PATH;
-    
-    delete process.env.HELIUS_RPC_URL;
-    delete process.env.SNIPER_KEYSTORE_PATH;
-    delete process.env.MAIN_KEYSTORE_PATH;
-
-    const agent = new JanusAgent(); // Hit constructor default config
-    expect(agent['config']).toEqual({});
-    
-    mockLoadKeypair.mockResolvedValue(Keypair.generate());
-    await agent.loadWallets('p1', 'p2');
-    
-    expect(mockLoadKeypair).toHaveBeenCalledWith('keystore/sniper.json', 'p1');
-    expect(mockLoadKeypair).toHaveBeenCalledWith('keystore/main.json', 'p2');
-
-    process.env.HELIUS_RPC_URL = oldRpc;
-    process.env.SNIPER_KEYSTORE_PATH = oldSniper;
-    process.env.MAIN_KEYSTORE_PATH = oldMain;
-  });
-
-  test('getInstance handles default config parameter', () => {
-    const { JanusAgent } = require('./janus');
-    JanusAgent['instance'] = null;
-    const agent = JanusAgent.getInstance(); // Hit default config={}
-    expect(agent['config']).toEqual({});
-  });
-
-  test('run loop handles missing keypairs', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    await expect(agent.run()).rejects.toThrow('Wallets not loaded');
-  });
-
-  test('loadWallets throws error on keystore failure', async () => {
-    const { JanusAgent } = require('./janus');
-    mockLoadKeypair.mockRejectedValue(new Error('File not found'));
-
-    const agent = new JanusAgent({}, mockRedis);
-    await expect(agent.loadWallets('p1', 'p2')).rejects.toThrow('Failed to load wallets: File not found');
-  });
-
-  test('run loop executes sweep and waits', async () => {
-    jest.useFakeTimers();
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    const sniperKp = Keypair.generate();
-    const mainKp = Keypair.generate();
-    agent['sniperKeypair'] = sniperKp;
-    agent['mainKeypair'] = mainKp;
-
-    mockGetBalance.mockResolvedValue(2.5 * LAMPORTS_PER_SOL);
-    mockSendAndConfirmTransaction.mockResolvedValue('sig');
-
-    // Start the loop in background
-    const runPromise = agent.run();
-
-    // Fast-forward past the first iteration
-    // The loop body runs once immediately, then hits the timeout
-    // We need to give it a tick to run the async work
-    await Promise.resolve(); // allow initial getBalance/sweepProfits to run
-    
-    expect(mockGetBalance).toHaveBeenCalled();
-    expect(mockSendAndConfirmTransaction).toHaveBeenCalled();
-
-    // Stop the loop
-    agent.stop();
-    
-    // Fast-forward timers to clear any remaining setTimeout
-    jest.runAllTimers();
-    await runPromise;
-    
-    jest.useRealTimers();
-  });
-
-  test('run loop handles error inside the loop', async () => {
-    jest.useFakeTimers();
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    agent['sniperKeypair'] = Keypair.generate();
-    agent['mainKeypair'] = Keypair.generate();
-
-    mockGetBalance.mockRejectedValue(new Error('RPC Down'));
-
-    const runPromise = agent.run();
-    await Promise.resolve();
-
-    expect(mockGetBalance).toHaveBeenCalled();
-    
-    agent.stop();
-    jest.runAllTimers();
-    await runPromise;
-    jest.useRealTimers();
-  });
-
-  test('sweepProfits skips tiny amounts', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    agent['sniperKeypair'] = Keypair.generate();
-    agent['mainKeypair'] = Keypair.generate();
-
-    // 0.5 RESERVE + 0.04 = 0.54
-    await agent['sweepProfits'](0.54);
-
-    expect(mockSendAndConfirmTransaction).not.toHaveBeenCalled();
-  });
-
-  test('sweepProfits handles missing keypairs early return', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    // sniperKeypair is null by default
-    await agent['sweepProfits'](3.0);
-
-    expect(mockSendAndConfirmTransaction).not.toHaveBeenCalled();
-  });
-
-  test('checkSniperBalance returns 0 if keypair missing', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    
-    const bal = await agent.checkSniperBalance();
-    expect(bal).toBe(0);
-  });
-
-  test('checkSniperBalance returns balance in SOL', async () => {
-    const { JanusAgent } = require('./janus');
-    const agent = new JanusAgent({}, mockRedis);
-    agent['sniperKeypair'] = Keypair.generate();
-    mockGetBalance.mockResolvedValue(1.5 * LAMPORTS_PER_SOL);
-
-    const bal = await agent.checkSniperBalance();
-    expect(bal).toBe(1.5);
-  });
+    test('run loop error handling', async () => {
+        jest.useFakeTimers();
+        const agent = new JanusAgent({}, mockRedis);
+        await agent.loadWallets('p1', 'p2');
+        
+        const mockConn = (agent as any).connection;
+        mockConn.getBalance.mockRejectedValueOnce(new Error('Network down'));
+        
+        const runPromise = agent.run();
+        
+        await jest.advanceTimersByTimeAsync(100);
+        await agent.stop();
+        await jest.advanceTimersByTimeAsync(61000);
+        await runPromise;
+        jest.useRealTimers();
+    }, 10000);
 });

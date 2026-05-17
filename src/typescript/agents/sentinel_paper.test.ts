@@ -206,9 +206,6 @@ describe('SentinelAgent Paper Coverage', () => {
 
     test('monitor positions in run loop', async () => {
         jest.useFakeTimers();
-        let now = Date.now();
-        jest.spyOn(Date, 'now').mockImplementation(() => now);
-        
         agent['dbInitialized'] = true;
         agent['running'] = true;
         
@@ -224,27 +221,21 @@ describe('SentinelAgent Paper Coverage', () => {
             price_buffer: []
         });
         
-        // Mock polling interval to be short for test
-        const fetchSpy = jest.spyOn(agent, 'fetchPrice').mockResolvedValue(0.0015);
-        const updateSpy = jest.spyOn(agent, 'updatePositionState').mockResolvedValue(undefined);
+        agent.recoverPositions = jest.fn().mockResolvedValue(undefined);
+        agent.fetchPrice = jest.fn().mockResolvedValue(0.0015);
+        agent.updatePositionState = jest.fn().mockResolvedValue(undefined);
         
         const runPromise = agent.run();
         
         // 1. Initial 3s wait
-        now += 3500;
-        jest.advanceTimersByTime(3500);
-        await Promise.resolve();
-        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(3500);
         
         // 2. Loop should have executed at least once
-        expect(fetchSpy).toHaveBeenCalledWith(MINT_A);
-        expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 0.0015);
+        expect(agent.fetchPrice).toHaveBeenCalledWith(MINT_A);
+        expect(agent.updatePositionState).toHaveBeenCalled();
         
         agent['running'] = false;
-        now += 10000;
-        jest.advanceTimersByTime(10000);
-        await Promise.resolve();
-        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(6000);
         
         await runPromise;
         jest.useRealTimers();

@@ -1,5 +1,5 @@
 import { CircuitBreaker, CircuitState } from './circuit-breaker';
-import { validateConfig, validateConfigFile } from './config_validator';
+import { validateConfig, validateConfigFile, parseSimpleYaml } from './config_validator';
 import { generateOTP, verifyOTP } from './telegram_auth';
 import { readPassphraseStdin } from './passphrase';
 import * as fs from 'fs';
@@ -105,7 +105,7 @@ section:
   num: 123
   str: "quoted"
 `;
-        const result = (require('./config_validator') as any).parseSimpleYaml(yamlStr);
+        const result = parseSimpleYaml(yamlStr);
         expect(result.section.key).toBe('value');
         expect(result.section.bool).toBe(true);
         expect(result.section.num).toBe(123);

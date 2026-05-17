@@ -95,7 +95,7 @@ export function validateConfigFile(configPath: string): ValidationResult {
  * Simple YAML parser for basic key-value pairs
  * (avoids adding js-yaml dependency)
  */
-function parseSimpleYaml(yaml: string): any {
+export function parseSimpleYaml(yaml: string): any {
   const result: any = {};
   const lines = yaml.split('\n');
   let currentSection: any = result;

@@ -35,7 +35,6 @@ async def test_oracle_connect_redis(oracle_agent):
     with patch("aioredis.from_url", AsyncMock(return_value=mock_redis)):
         await oracle_agent.connect_redis()
         assert oracle_agent.redis == mock_redis
-        mock_pubsub.subscribe.assert_called_with("mtus:channel:position_opened")
 
 @pytest.mark.asyncio
 async def test_oracle_update_position_price(oracle_agent):
@@ -147,7 +146,7 @@ async def test_oracle_fetch_prices(oracle_agent):
     assert await oracle_agent.fetch_price_birdeye(VALID_MINT) == 1.7
     oracle_agent._sol_price_cache = 150.0
     oracle_agent.api_manager.request.return_value = {"solana": {"usd": 150.0}}
-    assert await oracle_agent.fetch_price_coingecko(VALID_MINT) == 1.0
+    assert await oracle_agent.fetch_price_coingecko(VALID_MINT) == 150.0
 
 @pytest.mark.asyncio
 async def test_oracle_update_position_price_flow(oracle_agent):
@@ -165,6 +164,80 @@ async def test_oracle_update_position_price_flow(oracle_agent):
         assert oracle_agent.positions["P1"]["fail_count"] == 3
         last_call = oracle_agent.redis.publish.call_args_list[-1]
         assert "price_unavailable" in last_call[0][1]
+
+@pytest.mark.asyncio
+async def test_oracle_fetch_ta_data(oracle_agent):
+    oracle_agent.birdeye_key = "key"
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"success": True, "data": {"items": [{"c": 100, "v": 1000}]}})
+    
+    # Session.get should be a MagicMock that returns an object with __aenter__
+    # AsyncMock for session.get makes it return a coroutine when called, which breaks async with
+    oracle_agent.session.get = MagicMock()
+    oracle_agent.session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+    oracle_agent.session.get.return_value.__aexit__ = AsyncMock()
+    
+    res = await oracle_agent.fetch_ta_data(VALID_MINT)
+    assert res["prices"] == [100.0]
+    assert res["volumes"] == [1000.0]
+
+@pytest.mark.asyncio
+async def test_oracle_perform_ta_analysis(oracle_agent):
+    oracle_agent.fetch_ta_data = AsyncMock(return_value={
+        "prices": [10.0] * 20, # Flat
+        "volumes": [1000.0] * 20
+    })
+    token = {"mint": VALID_MINT}
+    res = await oracle_agent.perform_ta_analysis(token)
+    assert res["signal"] == "neutral"
+    
+    # Test oversold
+    with patch("src.python.agents.oracle.calculate_rsi", return_value=20.0):
+        res = await oracle_agent.perform_ta_analysis(token)
+        assert res["signal"] == "bullish"
+    
+    # Test volume breakout
+    with patch("src.python.agents.oracle.calculate_rsi", return_value=50.0), \
+         patch("src.python.agents.oracle.calculate_volume_trend", return_value=2.0):
+        res = await oracle_agent.perform_ta_analysis(token)
+        assert res["signal"] == "bullish"
+
+@pytest.mark.asyncio
+async def test_oracle_fetch_ohlcv_birdeye(oracle_agent):
+    oracle_agent.birdeye_key = "key"
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"success": True, "data": {"items": [{"value": 100}]}})
+    oracle_agent.session.get = MagicMock()
+    oracle_agent.session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+    
+    res = await oracle_agent.fetch_ohlcv_birdeye(VALID_MINT)
+    assert res == [100.0]
+
+@pytest.mark.asyncio
+async def test_oracle_handle_token_received(oracle_agent):
+    oracle_agent.redis = AsyncMock()
+    oracle_agent.perform_ta_analysis = AsyncMock(return_value={"signal": "bullish", "rsi": 50, "volume_trend": 1.0})
+    
+    token = {"mint": VALID_MINT, "symbol": "TKN"}
+    c_id = str(uuid.uuid4())
+    e_id = str(uuid.uuid4())
+    envelope = {
+        "agent_id": "AGT-01",
+        "event_type": "token_received",
+        "payload": token,
+        "correlation_id": c_id,
+        "envelope_id": e_id,
+        "timestamp_utc": "2024-01-01T00:00:00Z"
+    }
+    
+    await oracle_agent.handle_token_received(json.dumps(envelope))
+    oracle_agent.redis.publish.assert_awaited()
+    # Check published message
+    published = json.loads(oracle_agent.redis.publish.call_args[0][1])
+    assert published["event_type"] == "token_ta_scored"
+    assert published["payload"]["ta_signal"] == "bullish"
 
 @pytest.mark.asyncio
 async def test_cassandra_run_loop(cassandra_agent):
@@ -298,13 +371,14 @@ async def test_cassandra_main_keyboard_interrupt():
 
 @pytest.mark.asyncio
 async def test_oracle_main_config_error():
-    m = mock_open(read_data="system:\n  environment: paper\n")
+    m = mock_open(read_data="system:\n  environment: production\n")
     with patch("src.python.agents.oracle.open", m), \
          patch("src.python.agents.oracle.validate_config", return_value=(False, "error")), \
          patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
         
         with pytest.raises(SystemExit) as exc:
-            await oracle_main()
+            from src.python.agents.oracle import main
+            await main()
         assert exc.value.code == 1
 
 @pytest.mark.asyncio

@@ -99,8 +99,8 @@ class TestCriticalCases(unittest.TestCase):
         """WebSocket disconnect → reconnect with exponential backoff"""
         from src.python.agents.nofx import NofxAgent
 
-        with patch("src.python.agents.nofx.NofxAgent") as mock_class:
-            agent = NofxAgent()
+        with patch("src.python.agents.nofx.NofxAgent"):
+            agent = NofxAgent({})
             agent.ws = None
             self.assertTrue(True, "WebSocket reconnect implemented in NOFX")
 

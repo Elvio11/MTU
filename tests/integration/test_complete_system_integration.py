@@ -61,7 +61,7 @@ class TestAllPythonAgents:
         """Test NOFX (AGT-01) agent has all required methods."""
         from src.python.agents.nofx import NofxAgent
 
-        agent = NofxAgent()
+        agent = NofxAgent({})
         required_methods = [
             "connect_redis",
             "run",
@@ -118,7 +118,7 @@ class TestAllPythonAgents:
             "check_g4_dev_holdings",
             "check_g5_top10_concentration",
             "check_g6_rugcheck_score",
-            "check_g7_market_cap",
+            "check_g7_liquidity_size",
             "check_g8_social_metadata",
             "check_g9_duplicate",
             "check_g10_honeypot",
@@ -131,7 +131,7 @@ class TestAllPythonAgents:
         """Test Oracle (AGT-04) agent structure."""
         from src.python.agents.oracle import OracleAgent
 
-        agent = OracleAgent()
+        agent = OracleAgent({})
         required_methods = [
             "run",
             "stop",
@@ -146,7 +146,7 @@ class TestAllPythonAgents:
         """Test Cassandra (AGT-08) agent structure."""
         from src.python.agents.cassandra import CassandraAgent
 
-        agent = CassandraAgent()
+        agent = CassandraAgent({})
         required_methods = ["run", "stop", "fetch_dexscreener_data", "score_sentiment"]
         for method in required_methods:
             assert hasattr(agent, method), f"AGT-08: Missing method {method}"

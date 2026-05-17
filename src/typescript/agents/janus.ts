@@ -17,8 +17,11 @@ export class JanusAgent {
   private running: boolean = false;
   private config: any;
 
-  constructor(config: any = {}) {
+  constructor(config: any = {}, redis?: Redis) {
     this.config = config;
+    if (redis) {
+      this.redis = redis;
+    }
     
     const rpcUrl = process.env.HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com';
     this.connection = new Connection(rpcUrl, 'confirmed');
@@ -27,7 +30,11 @@ export class JanusAgent {
   }
 
   public async init(redis?: Redis): Promise<void> {
-    this.redis = redis || await createRedisClient();
+    if (redis) {
+      this.redis = redis;
+    } else if (!this.redis) {
+      this.redis = await createRedisClient();
+    }
     console.log('[Janus] Initialized');
   }
 
@@ -134,7 +141,13 @@ export class JanusAgent {
 
   async stop(): Promise<void> {
     this.running = false;
-    await this.redis.quit();
+    if (this.redis) {
+      try {
+        await this.redis.quit();
+      } catch (e) {
+        // Ignore quit errors
+      }
+    }
     console.log("[STOP] Janus agent stopped");
   }
 

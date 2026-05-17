@@ -21,7 +21,11 @@ from src.python.shared.constants import (
     CHANNEL_POSITION_OPENED,
     CHANNEL_PRICE_UPDATED,
     CHANNEL_PRICE_UNAVAILABLE,
+    CHANNEL_TOKEN_RECEIVED,
+    CHANNEL_TOKEN_TA_SCORED,
+    EVENT_TOKEN_TA_SCORED,
 )
+from src.python.shared.indicators import calculate_rsi, calculate_volume_trend, analyze_trend
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 
@@ -62,7 +66,6 @@ class OracleAgent:
             "redis://localhost:6379", decode_responses=True
         )
         self.pubsub = self.redis.pubsub()
-        await self.pubsub.subscribe(CHANNEL_POSITION_OPENED)
 
         self.birdeye_key = os.getenv("BIRDEYE_API_KEY")
         if self.birdeye_key:
@@ -97,6 +100,150 @@ class OracleAgent:
             pass
         return 0.0
 
+    async def fetch_ohlcv_birdeye(self, mint: str, interval: str = "5m", limit: int = 20) -> List[float]:
+        """Fetch historical price series from Birdeye for TA"""
+        if not self.birdeye_key:
+            return []
+        try:
+            # Birdeye /defi/history_price endpoint
+            url = "https://public-api.birdeye.so/defi/history_price"
+            now = int(time.time())
+            # interval mapping: 5m -> 300, 15m -> 900
+            seconds = 300 if interval == "5m" else 900
+            time_from = now - (seconds * (limit + 5))
+            
+            params = {
+                "address": mint,
+                "address_type": "token",
+                "type": interval,
+                "time_from": time_from,
+                "time_to": now
+            }
+            
+            headers = {"X-API-KEY": self.birdeye_key}
+            async with self.session.get(url, params=params, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("success"):
+                        items = data.get("data", {}).get("items", [])
+                        return [float(i.get("value", 0)) for i in items]
+        except Exception as e:
+            print(f"[AGT-04] OHLCV fetch failed: {e}")
+        return []
+
+    async def fetch_ta_data(self, mint: str, interval: str = "5m", limit: int = 20) -> Dict[str, List[float]]:
+        """Fetch historical price and volume series from Birdeye"""
+        ta_data = {"prices": [], "volumes": []}
+        if not self.birdeye_key:
+            return ta_data
+            
+        try:
+            # Using Birdeye /defi/ohlcv endpoint for both price and volume
+            url = "https://public-api.birdeye.so/defi/ohlcv"
+            now = int(time.time())
+            seconds = 300 if interval == "5m" else 900
+            time_from = now - (seconds * (limit + 5))
+            
+            params = {
+                "address": mint,
+                "type": interval,
+                "time_from": time_from,
+                "time_to": now
+            }
+            
+            headers = {"X-API-KEY": self.birdeye_key}
+            async with self.session.get(url, params=params, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("success"):
+                        items = data.get("data", {}).get("items", [])
+                        ta_data["prices"] = [float(i.get("c", 0)) for i in items] # Close price
+                        ta_data["volumes"] = [float(i.get("v", 0)) for i in items] # Volume
+        except Exception as e:
+            print(f"[AGT-04] TA data fetch failed: {e}")
+        
+        # Fallback to history_price if ohlcv fails
+        if not ta_data["prices"]:
+            ta_data["prices"] = await self.fetch_ohlcv_birdeye(mint, interval, limit)
+            
+        return ta_data
+
+    async def fetch_ohlcv_dexscreener(self, mint: str) -> List[float]:
+        """Fallback: Fetch rough OHLCV/Price history from DexScreener pairs"""
+        # DexScreener doesn't provide easy historical series in public API
+        # We'll just return an empty list or use current price if needed
+        return []
+
+    async def perform_ta_analysis(self, token_payload: Dict) -> Dict:
+        """Calculate technical indicators and determine signal"""
+        mint = token_payload.get("mint")
+        data = await self.fetch_ta_data(mint)
+        prices = data["prices"]
+        volumes = data["volumes"]
+        
+        ta_data = {
+            "rsi": None,
+            "volume_trend": 1.0,
+            "signal": "neutral"
+        }
+        
+        if len(prices) >= 14:
+            rsi = calculate_rsi(prices)
+            ta_data["rsi"] = rsi
+            
+            # Use current vs prev price for trend
+            trend = analyze_trend(prices)
+            
+            # Volume multiplier
+            vol_trend = calculate_volume_trend(volumes)
+            ta_data["volume_trend"] = vol_trend
+            
+            # Simple Signal Logic
+            rsi_oversold = self.config.get("hydra", {}).get("ta_rsi_oversold", 35)
+            rsi_bullish = self.config.get("hydra", {}).get("ta_rsi_bullish", 55)
+            vol_mult = self.config.get("hydra", {}).get("ta_volume_multiplier_threshold", 1.5)
+            
+            if rsi and rsi < rsi_oversold:
+                ta_data["signal"] = "bullish" # Oversold bounce
+            elif rsi and rsi > rsi_bullish and trend == "bullish":
+                ta_data["signal"] = "bullish" # Momentum breakout
+            elif rsi and rsi > 45 and vol_trend is not None and vol_trend > vol_mult:
+                ta_data["signal"] = "bullish" # Volume-led accumulation
+            elif rsi and rsi > 80:
+                ta_data["signal"] = "bearish" # Overbought
+                
+        return ta_data
+
+    async def handle_token_received(self, envelope_json: str):
+        """Handle new token discovery and perform TA scoring"""
+        try:
+            envelope = AgentMessageEnvelope.model_validate_json(envelope_json)
+            token = envelope.payload
+            
+            is_graduated = token.get("is_graduated", False)
+            if not is_graduated:
+                # We don't perform TA on early/bonding-curve tokens as they don't have enough chart history
+                return
+                
+            print(f"AGT-04: Received TA request for {token.get('symbol')} ({token.get('mint')[:8]})")
+            
+            # Perform TA
+            ta_results = await self.perform_ta_analysis(token)
+            token["ta_data"] = ta_results
+            token["ta_signal"] = ta_results["signal"]
+            token["sol_price"] = await self.get_sol_price() # Include current SOL price
+            
+            # Re-publish as TA scored
+            envelope.agent_id = "AGT-04"
+            envelope.event_type = EVENT_TOKEN_TA_SCORED
+            envelope.payload = token
+            
+            await self.redis.publish(CHANNEL_TOKEN_TA_SCORED, envelope.model_dump_json())
+            print(f"AGT-04: TA Scored {token.get('symbol')} -> Signal: {ta_results['signal']} (RSI: {ta_results['rsi']}, SOL: ${token['sol_price']:.2f})")
+            
+        except Exception as e:
+            print(f"AGT-04: Error in TA analysis: {e}")
+
     async def fetch_price_birdeye(self, mint: str) -> float:
         """Tertiary: Birdeye"""
         try:
@@ -114,13 +261,31 @@ class OracleAgent:
             data = await self.api_manager.request("market_data", "GET", provider="coingecko", path="/simple/price", params={"ids": SOL_TOKEN_ID, "vs_currencies": "usd"}, timeout=10)
             if data:
                 usd_price = data.get(SOL_TOKEN_ID, {}).get("usd", 0)
-                if usd_price > 0 and self._sol_price_cache:
-                    # Very rough estimate if we only have SOL price
-                    token_usd = self._sol_price_cache / usd_price
-                    return token_usd
+                return float(usd_price)
         except Exception as e:
-            print(f"[AGT-04] CoinGecko fallback failed: {e}")
+            print(f"[AGT-04] CoinGecko SOL fetch failed: {e}")
         return 0.0
+
+    async def get_sol_price(self) -> float:
+        """Fetch SOL price with caching (60s) and Redis persistence"""
+        now = time.time()
+        if self._sol_price_cache and (now - self._sol_price_time) < 60:
+            return self._sol_price_cache
+
+        # Try Jupiter first
+        price = await self.fetch_price_jupiter(SOL_MINT)
+        if price <= 0:
+            # Try CoinGecko
+            price = await self.fetch_price_coingecko(SOL_MINT)
+
+        if price > 0:
+            self._sol_price_cache = price
+            self._sol_price_time = now
+            if self.redis:
+                await self.redis.set("mtus:sol_price", str(price))
+            return price
+            
+        return self._sol_price_cache or 200.0 # Extreme fallback
 
     async def update_position_price(self, position_id: str, mint: str):
         pos = self.positions[position_id]
@@ -190,11 +355,15 @@ class OracleAgent:
         try:
             envelope = AgentMessageEnvelope.model_validate_json(envelope_json)
             payload = envelope.payload
-            position_id = payload["position_id"]
+            position_id = payload.get("position_id") or envelope.correlation_id or f"pos_{int(time.time())}"
             mint = payload["mint"]
+            entry_price = payload.get("entry_price_sol")
+            if entry_price is None:
+                entry_price = 0.0
+                
             self.positions[position_id] = {
                 "mint": mint,
-                "last_prices": [payload.get("entry_price_sol", 0.0)],
+                "last_prices": [float(entry_price)],
                 "fail_count": 0,
             }
             print(f"AGT-04: Tracking position {position_id} for {mint}")
@@ -205,8 +374,8 @@ class OracleAgent:
         self.running = True
         await self.connect_redis()
         self.session = aiohttp.ClientSession()
-        is_subscribed = True
-        print("AGT-04: Oracle agent started")
+        is_subscribed = False
+        print("AGT-04: Oracle agent starting loop...")
 
         while self.running:
             try:
@@ -214,8 +383,9 @@ class OracleAgent:
 
                 if active and not is_subscribed:
                     await self.pubsub.subscribe(CHANNEL_POSITION_OPENED)
+                    await self.pubsub.subscribe(CHANNEL_TOKEN_RECEIVED)
                     is_subscribed = True
-                    print("AGT-04: [WINDOW OPEN] Resubscribed to position events")
+                    print(f"AGT-04: Subscribed to {CHANNEL_POSITION_OPENED} and {CHANNEL_TOKEN_RECEIVED}")
                 elif not active and is_subscribed:
                     await self.pubsub.unsubscribe()
                     is_subscribed = False
@@ -228,7 +398,14 @@ class OracleAgent:
                 # Handle incoming position_opened messages
                 message = await self.pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
-                    await self.handle_position_opened(message["data"])
+                    channel = message["channel"]
+                    if channel == CHANNEL_POSITION_OPENED:
+                        await self.handle_position_opened(message["data"])
+                    elif channel == CHANNEL_TOKEN_RECEIVED:
+                        await self.handle_token_received(message["data"])
+
+                # Update SOL price cache
+                await self.get_sol_price()
 
                 # Poll prices for all open positions
                 for pos_id in list(self.positions.keys()):

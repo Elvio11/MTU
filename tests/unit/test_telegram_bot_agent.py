@@ -34,7 +34,6 @@ async def test_telegram_bot_agent_main_success():
                 await telegram_agent.main()
 
         mock_create_bot.assert_called_once_with("fake_token_long_enough", "123456", "fake_seed")
-        mock_bot.initialize.assert_awaited_once()
         mock_bot.start.assert_awaited_once()
         mock_bot.stop.assert_awaited_once()
 

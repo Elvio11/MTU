@@ -1,57 +1,76 @@
-interface AgentCardProps {
-  agent: {
-    id: string;
-    name: string;
-    status: 'healthy' | 'unhealthy' | 'starting' | 'paused';
-    lastHeartbeat: string;
-    tradesToday?: number;
-    pnlToday?: number;
-  };
+import React from 'react';
+import { GlassCard } from './GlassCard';
+import { Cpu, Activity, AlertTriangle, Clock } from 'lucide-react';
+
+interface Agent {
+  id: string;
+  name: string;
+  status: 'healthy' | 'unhealthy' | 'starting' | 'paused';
+  lastHeartbeat: string;
+  tradesToday?: number;
+  pnlToday?: number;
+  uptime?: number;
+  messagesProcessed?: number;
+  errors?: number;
+  lastError?: string;
+  avgResponseTime?: number;
 }
 
-export default function AgentCard({ agent }: AgentCardProps) {
-  const statusConfig: Record<string, { color: string; text: string }> = {
-    healthy: { color: 'bg-profit', text: 'Healthy' },
-    unhealthy: { color: 'bg-loss', text: 'Unhealthy' },
-    starting: { color: 'bg-warning', text: 'Starting' },
-    paused: { color: 'bg-muted', text: 'Paused' },
-  };
+interface AgentCardProps {
+  agent: Agent;
+}
 
-  const config = statusConfig[agent.status] || { color: 'bg-muted', text: 'Unknown' };
+const AgentCard: React.FC<AgentCardProps> = ({ agent }) => {
+  const statusColor = 
+    agent.status === 'healthy' ? 'text-profit' : 
+    agent.status === 'unhealthy' ? 'text-loss' : 
+    agent.status === 'starting' ? 'text-mtus-accent' : 'text-muted';
 
   return (
-    <div className="bg-mtus-card p-4 rounded-xl border border-slate-700">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-white">{agent.name}</h3>
-          <p className="text-xs text-slate-400">{agent.id}</p>
+    <GlassCard 
+      title={agent.name} 
+      subtitle={`ID: ${agent.id}`} 
+      icon={Cpu}
+      className="h-full"
+    >
+      <div className="space-y-4">
+        <div className="flex justify-between items-center">
+          <span className="text-[10px] font-bold text-muted uppercase tracking-widest">Status</span>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${agent.status === 'healthy' ? 'bg-profit' : 'bg-loss'} animate-pulse`} />
+            <span className={`text-xs font-bold uppercase ${statusColor}`}>{agent.status}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${config.color}`} />
-          <span className="text-xs text-slate-400">{config.text}</span>
+
+        <div className="grid grid-cols-2 gap-4 pt-2">
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-muted">
+              <Activity size={12} />
+              <span className="text-[10px] font-bold uppercase">Messages</span>
+            </div>
+            <p className="text-sm font-bold text-white">{agent.messagesProcessed || 0}</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-muted">
+              <AlertTriangle size={12} />
+              <span className="text-[10px] font-bold uppercase">Errors</span>
+            </div>
+            <p className={`text-sm font-bold ${agent.errors ? 'text-loss' : 'text-profit'}`}>{agent.errors || 0}</p>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-white/5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1 text-muted">
+              <Clock size={12} />
+              <span className="text-[10px] font-bold uppercase">Heartbeat</span>
+            </div>
+            <span className="text-[10px] font-mono text-white/60">{agent.lastHeartbeat}</span>
+          </div>
         </div>
       </div>
-      
-      <div className="space-y-2 text-sm">
-        <div className="flex justify-between">
-          <span className="text-slate-400">Last Heartbeat</span>
-          <span className="text-white">{agent.lastHeartbeat}</span>
-        </div>
-        {agent.tradesToday !== undefined && (
-          <div className="flex justify-between">
-            <span className="text-slate-400">Trades Today</span>
-            <span className="text-white">{agent.tradesToday}</span>
-          </div>
-        )}
-        {agent.pnlToday !== undefined && (
-          <div className="flex justify-between">
-            <span className="text-slate-400">PnL Today</span>
-            <span className={agent.pnlToday >= 0 ? 'text-profit' : 'text-loss'}>
-              {agent.pnlToday >= 0 ? '+' : ''}{agent.pnlToday.toFixed(4)} SOL
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
+    </GlassCard>
   );
-}
+};
+
+export default AgentCard;

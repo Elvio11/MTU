@@ -5,6 +5,7 @@ import { Connection, Keypair, Transaction, PublicKey, VersionedTransaction, Syst
 // Constants
 const SHARED_KEYPAIR = Keypair.generate();
 const MINT_A = 'EPjFW36vXT3Z3pJvAbYTNp3Xbw7B637vH8G2fEU3XgA';
+const MINT_B = 'So11111111111111111111111111111111111111112';
 const PUMP_MINT = 'PumP111111111111111111111111111111111111111';
 
 // Mock dependencies
@@ -170,30 +171,42 @@ describe('SentinelAgent Complete Coverage', () => {
 
     test('monitorPositions detailed logic (TP/SL/TS)', async () => {
         const mockPositions = new Map();
-        // TP1 Hit
+        // TP1 Hit - uses MINT_A
         mockPositions.set('tp1', { 
             position_id: 'tp1', mint: MINT_A, entry_price_sol: 0.001, peak_price_sol: 0.001, 
             tokens_received: 10000, tp1_hit: 0, tp2_hit: 0, sl_hit: 0, state: 'OPEN', price_buffer: [], 
-            entry_timestamp_utc: new Date().toISOString() 
+            entry_timestamp_utc: new Date().toISOString(),
+            tp1_price: 0.002, sl_price: 0.0005, tp2_price: 0.003
         });
-        // SL Hit
+        // SL Hit - uses MINT_B so fetchPrice can return different values
         mockPositions.set('sl', { 
-            position_id: 'sl', mint: MINT_A, entry_price_sol: 0.001, peak_price_sol: 0.001, 
+            position_id: 'sl', mint: MINT_B, entry_price_sol: 0.001, peak_price_sol: 0.001, 
             tokens_received: 10000, tp1_hit: 0, tp2_hit: 0, sl_hit: 0, state: 'OPEN', price_buffer: [],
-            entry_timestamp_utc: new Date().toISOString() 
+            entry_timestamp_utc: new Date().toISOString(),
+            tp1_price: 0.002, sl_price: 0.0005, tp2_price: 0.003
         });
         
         agent['positions'] = mockPositions;
         
-        jest.spyOn(agent, 'sellPortion').mockResolvedValue(undefined);
+        agent.sellPortion = jest.fn().mockResolvedValue(undefined);
         
-        // Test TP1
-        jest.spyOn(agent, 'fetchPrice').mockResolvedValue(0.0025); // 2.5x > 2.0x
+        // Test TP1 - MINT_A returns 2.5x (>2.0x TP1 trigger)
+        agent.fetchPrice = jest.fn()
+            .mockImplementation((mint: string) => {
+                if (mint === MINT_A) return Promise.resolve(0.0025);
+                if (mint === MINT_B) return Promise.resolve(0.0008); // Normal price for SL position
+                return Promise.resolve(0.001);
+            });
         await agent['monitorPositions']();
         expect(agent.sellPortion).toHaveBeenCalledWith(expect.objectContaining({ position_id: 'tp1' }), 0.5, 'tp1_hit');
 
-        // Reset and Test SL
-        jest.spyOn(agent, 'fetchPrice').mockResolvedValue(0.0004); // 0.4x < 0.5x
+        // Test SL - MINT_B returns below SL threshold
+        agent.fetchPrice = jest.fn()
+            .mockImplementation((mint: string) => {
+                if (mint === MINT_A) return Promise.resolve(0.0015); // Normal for TP1
+                if (mint === MINT_B) return Promise.resolve(0.0004); // 0.4x < 0.5x SL trigger
+                return Promise.resolve(0.001);
+            });
         await agent['monitorPositions']();
         expect(agent.sellPortion).toHaveBeenCalledWith(expect.objectContaining({ position_id: 'sl' }), 1.0, 'stop_loss_hit');
     });
@@ -210,15 +223,17 @@ describe('SentinelAgent Complete Coverage', () => {
         jest.useFakeTimers();
         agent['dbInitialized'] = true;
         agent['running'] = true;
-        jest.spyOn(agent, 'recoverPositions').mockResolvedValue(undefined);
+        agent.recoverPositions = jest.fn().mockResolvedValue(undefined);
         
         const runPromise = agent.run();
-        // Skip initialization delay
+        // Skip initialization delay (3s)
         await jest.advanceTimersByTimeAsync(3500);
         await Promise.resolve();
         
+        // At this point polling loop is active. Stop it.
         agent['running'] = false;
-        await jest.advanceTimersByTimeAsync(1000);
+        // Advance past the polling interval (5s) for loop to exit
+        await jest.advanceTimersByTimeAsync(6000);
         await runPromise;
         
         expect(mockRedis.subscribe).toHaveBeenCalled();

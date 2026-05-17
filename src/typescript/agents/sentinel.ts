@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
 import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair } from '@solana/web3.js';
+import { execSync } from 'child_process';
 import { loadKeypairFromKeystore } from '../shared/keystore';
 import { QuoteResponse } from '@jup-ag/api';
 import { createEnvelope, AgentMessageEnvelope, EventType } from '../shared/envelope';
@@ -10,7 +11,7 @@ import Redis from 'ioredis';
 import { createRedisClient } from '../shared/redis';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { getOpenPositions, updatePosition, insertAuditLog } from '../shared/db';
+import { getOpenPositions, updatePosition, insertPosition, insertAuditLog } from '../shared/db';
 import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { TransactionInstruction } from '@solana/web3.js';
 import { isOperationalWindowActive } from '../shared/operational-window';
@@ -75,11 +76,14 @@ export class SentinelAgent {
     return true; // Default to safe mode
   }
 
-  constructor(config?: any) {
+  constructor(config?: any, redis?: Redis) {
     if (config) {
       this.config = config;
     } else {
       this.loadConfig();
+    }
+    if (redis) {
+      this.redis = redis;
     }
   }
 
@@ -87,7 +91,11 @@ export class SentinelAgent {
    * Initialize resources like Redis
    */
   async init(redis?: Redis): Promise<void> {
-    this.redis = redis || await createRedisClient();
+    if (redis) {
+      this.redis = redis;
+    } else if (!this.redis) {
+      this.redis = await createRedisClient();
+    }
     console.log('[Sentinel] Initialized');
   }
 
@@ -109,53 +117,78 @@ export class SentinelAgent {
     console.log(`AGT-06: Loaded sniper wallet: ${this.keypair.publicKey.toBase58()}`);
   }
 
-  async fetchPrice(mint: string): Promise<number> {
+  async fetchPricesBatch(mints: string[]): Promise<Record<string, number>> {
+    const prices: Record<string, number> = {};
+    if (mints.length === 0) return prices;
     try {
       const solUsd = await getSolPriceUsd(this.config);
-      const data: any = await rateLimitedRequest(async (baseUrl) => {
-        const resp = await axios.get(`${baseUrl}/price/v2?ids=${mint}`, { timeout: 3000 });
-        return resp.data;
+      
+      const mintsParam = mints.join(',');
+      const tokenUsdMap = await rateLimitedRequest(async () => {
+        // v2 price API is the stable batch endpoint
+        const resp = await axios.get(`https://api.jup.ag/price/v2?ids=${mintsParam}`, { 
+          headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
+          timeout: 5000 
+        });
+        const data = resp.data;
+        const result: Record<string, number> = {};
+        for (const mint of mints) {
+          result[mint] = parseFloat(data?.data?.[mint]?.price || "0");
+        }
+        return result;
       }, this.config);
       
-      const tokenUsd = data?.data?.[mint]?.price || 0;
-      if (tokenUsd > 0) return tokenUsd / solUsd;
-      throw new Error("Jupiter returned 0");
-    } catch {
-      // Fallback: Birdeye (returns USD, so we must divide by SOL price)
-      try {
-        const [tokenResp, solResp] = await Promise.all([
-          axios.get(`https://public-api.birdeye.so/public/price?address=${mint}`, {
-            headers: { 'X-API-KEY': BIRDEYE_API_KEY },
-            timeout: 3000,
-          }),
-          axios.get(`https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112`, { timeout: 3000 })
-        ]);
-        const tokenUsd = tokenResp.data?.data?.value || 0;
-        const solUsd = solResp.data?.['So11111111111111111111111111111111111111112']?.usdPrice || 150;
-        return tokenUsd / solUsd;
-      } catch {
-        return 0;
+      for (const mint of mints) {
+        if (tokenUsdMap[mint] > 0) {
+          prices[mint] = tokenUsdMap[mint] / solUsd;
+        } else {
+          // Fallback: Birdeye individual fallback (returns USD, so we must divide by SOL price)
+          try {
+            const birdeyeResp = await axios.get(`https://public-api.birdeye.so/public/price?address=${mint}`, {
+              headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || '' },
+              timeout: 5000
+            });
+            const tokenUsdBirdeye = birdeyeResp.data?.data?.value || 0;
+            prices[mint] = tokenUsdBirdeye > 0 ? tokenUsdBirdeye / solUsd : 0;
+          } catch {
+            prices[mint] = 0;
+          }
+        }
       }
+      return prices;
+    } catch (e: any) {
+      console.log(`AGT-06: [PRICE BATCH ERROR]: ${e.message}`);
+      return prices;
     }
   }
 
-  async updatePositionState(position: Position, currentPrice: number): Promise<void> {
-    position.price_buffer.push(currentPrice);
-    if (position.price_buffer.length > PRICE_BUFFER_SIZE) position.price_buffer.shift();
+  async fetchPrice(mint: string): Promise<number> {
+    const prices = await this.fetchPricesBatch([mint]);
+    return prices[mint] || 0;
+  }
 
-    // Time-based stop loss (Configurable, default 30m)
+
+  async updatePositionState(position: Position, currentPrice: number): Promise<void> {
+    if (currentPrice > 0) {
+      position.price_buffer.push(currentPrice);
+      if (position.price_buffer.length > PRICE_BUFFER_SIZE) position.price_buffer.shift();
+    }
+
+    // Time-based stop loss (Configurable, default 15m)
     const entryTime = new Date(position.entry_timestamp_utc).getTime();
     const now = Date.now();
-    const timeSlHours = this.config?.trading?.time_sl_hours || 0.5;
+    const timeSlHours = this.config?.trading?.time_sl_hours || 0.25;
     if (timeSlHours > 0) {
       const timeSlMs = timeSlHours * 60 * 60 * 1000;
-      if (position.state === 'OPEN' && (now - entryTime) > timeSlMs) {
-        console.log(`AGT-06: [TIME STOP] Position ${position.position_id} hit ${timeSlHours}h limit. Closing.`);
+      if (position.state !== 'CLOSED' && (now - entryTime) > timeSlMs) {
+        console.log(`AGT-06: [TIME STOP] Position ${position.position_id} hit ${timeSlHours}h limit (${Math.floor((now-entryTime)/60000)}m elapsed). Closing.`);
         position.state = 'STOP_LOSS';
         await this.sellPortion(position, 1.0, 'time_sl_hit');
         return;
       }
     }
+
+    if (currentPrice <= 0) return; // Skip price-dependent exits if price is invalid
 
     // Bonding Curve based exit (Maturity Exit)
     const exitProgressThreshold = this.config?.trading?.exit_bonding_curve_progress || 0;
@@ -188,6 +221,18 @@ export class SentinelAgent {
     }
 
     if (position.state === 'OPEN') {
+      // Check time-based stop loss (Max Hold Time)
+      const entryTime = new Date(position.entry_timestamp_utc).getTime();
+      const elapsedHours = (Date.now() - entryTime) / (1000 * 60 * 60);
+      const maxHoldHours = this.config.trading?.time_sl_hours || 0.5;
+
+      if (elapsedHours >= maxHoldHours) {
+        console.log(`AGT-06: [TIME-SL] Max hold time reached (${(maxHoldHours * 60).toFixed(1)}m) for ${position.mint.slice(0, 8)}`);
+        position.state = 'STOP_LOSS';
+        await this.sellPortion(position, 1.0, 'stop_loss_hit');
+        return;
+      }
+
       if (currentPrice >= position.tp1_price) {
         position.state = 'TAKE_PROFIT_1';
         await this.sellPortion(position, 0.5, 'tp1_hit');
@@ -371,56 +416,29 @@ export class SentinelAgent {
         const solRes = await axios.get(`https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112`);
         const solUsd = solRes.data?.['So11111111111111111111111111111111111111112']?.usdPrice || 150;
         const totalValueUsd = price * (amount / 1e6) * solUsd;
-        
         if (totalValueUsd < 0.5) {
-          console.log(`AGT-06: [DUST-CLEANUP] Token value $${totalValueUsd.toFixed(4)} is very low. Using aggressive slippage ladder.`);
-          SLIPPAGE_LADDER = [2500, 5000, 9900]; // 25%, 50%, 99%
+          SLIPPAGE_LADDER = [1500, 2000, 3000]; // Aggressive for dust
+          console.log(`AGT-06: [SELL] Low-value position ($${totalValueUsd.toFixed(3)}) — using aggressive slippage ladder`);
+        }
+      } catch {
+        // Non-critical, continue with default slippage
+      }
+
+      console.log(`AGT-06: [SELL] Fetching quote for PnL estimation: ${inputMint.slice(0, 8)} → SOL...`);
+      
+      let quote: QuoteResponse | null = null;
+      try {
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=500`;
+        const res = await fetch(quoteUrl, { headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' } });
+        if (res.ok) {
+          quote = await res.json() as QuoteResponse;
         }
       } catch (e) {
-        // Fallback to standard ladder if price check fails
-      }
-      let quote: QuoteResponse | null = null;
-      
-      if (apiVersion === 'v1') {
-        // v1 API: use slippage ladder (retry with higher slippage)
-        for (const slippageBps of SLIPPAGE_LADDER) {
-          try {
-            const q: QuoteResponse = await rateLimitedRequest(async (baseUrl) => {
-              const quoteUrl = `${baseUrl}/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`;
-              const res = await fetch(quoteUrl);
-              if (!res.ok) throw new Error(`V1 quote failed: ${res.status}`);
-              return res.json() as Promise<QuoteResponse>;
-            }, this.config);
-            if (q && q.outAmount) {
-              quote = q;
-              console.log(`AGT-06: [SELL] v1 quote with ${slippageBps/10}% slippage`);
-              break;
-            }
-          } catch {
-            // Try next slippage level
-          }
-        }
-      } else {
-        // v2 API: use RTSE (no slippageBps to enable auto-slippage)
-        try {
-          quote = await rateLimitedRequest(async (baseUrl) => {
-            const quoteUrl = `${baseUrl}/swap/v2/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}`;
-            const res = await fetch(quoteUrl);
-            if (!res.ok) throw new Error(`V2 quote failed: ${res.status}`);
-            return res.json() as Promise<QuoteResponse>;
-          }, this.config);
-        } catch (e) {
-          console.error(`AGT-06: [SELL] V2 quote failed, fallback to V1`);
-          apiVersion = 'v1'; // Logic to retry with v1 if needed could go here
-        }
+        console.warn(`AGT-06: [SELL] Quote fetch failed, using fallback for PnL`);
       }
       
-      console.log(`AGT-06: [SELL] Using ${apiVersion.toUpperCase()} API for sell (portion: ${portion * 100}%)`);
-      
-      if (!quote || !quote.outAmount) throw new Error('No Jupiter quote for sell');
-      
-      const exitPriceSol = Number(quote.outAmount) / 1e9;
-      console.log(`AGT-06: [${this.isPaperMode() ? 'PAPER' : 'LIVE'}] Exit quote for ${position.mint}: ${exitPriceSol} SOL`);
+      const exitPriceSol = quote && quote.outAmount ? Number(quote.outAmount) / 1e9 : position.peak_price_sol;
+      console.log(`AGT-06: [${this.isPaperMode() ? 'PAPER' : 'LIVE'}] Exit estimate for ${position.mint}: ${exitPriceSol} SOL`);
       
       if (this.isPaperMode()) {
         const paperTxId = `paper_sell_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -441,86 +459,81 @@ export class SentinelAgent {
 
       if (!this.keypair) throw new Error('Wallet not loaded');
 
-      // Preflight: Check wallet has enough SOL for fees before getting swap transaction
-      const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=' + process.env.HELIUS_KEY;
-      const connection = new Connection(HELIUS_RPC_URL);
-      const walletBalance = await connection.getBalance(this.keypair.publicKey);
-      const MIN_BALANCE_FOR_SELL = 500000; // 0.0005 SOL minimum for fees
-      if (walletBalance < MIN_BALANCE_FOR_SELL) {
-        console.log(`AGT-06: [SELL] ❌ ABORTED: Insufficient SOL for fees. Have: ${walletBalance/1e9} SOL, Need: ${MIN_BALANCE_FOR_SELL/1e9} SOL`);
-        const envelope = createEnvelope('AGT-06', 'trade_failed', {
-          position_id: position.position_id,
-          mint: position.mint,
-          sell_portion: portion,
-          error: 'Insufficient SOL for sell transaction fees',
-          current_price: position.peak_price_sol,
-        }, '');
-        await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
-        return;
-      }
-
-      const swapResult: any = await rateLimitedRequest(async (baseUrl) => {
-        const swapUrl = `${baseUrl}/swap/${apiVersion}/swap`;
-        const swapRes = await fetch(swapUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            quoteResponse: quote,
-            userPublicKey: this.keypair!.publicKey.toBase58(),
-            wrapUnwrapSOL: true,
-            prioritizationFeeLamports: 100000,
-            maxPrioritizationFeeLamports: 100000,
-          }),
-        });
-        if (!swapRes.ok) throw new Error(`Swap failed: ${swapRes.status}`);
-        return swapRes.json();
-      }, this.config);
-      const txBytes = Buffer.from(swapResult.swapTransaction, 'base64');
-
-      let signedTxBytes: Uint8Array;
-      
+      // CLI Integration Branch for Sells
+      console.log(`AGT-06: [CLI-MODE] Initializing sell via Jupiter CLI binary...`);
       try {
-        const versionedTx = VersionedTransaction.deserialize(txBytes);
-        versionedTx.sign([this.keypair!]);
-        signedTxBytes = versionedTx.serialize();
-      } catch (e) {
-        // Fallback to legacy
-        const legacyTx = Transaction.from(txBytes);
-        legacyTx.sign(this.keypair!);
-        signedTxBytes = legacyTx.serialize();
+        const txId = await this.executeViaCli(inputMint, 'So11111111111111111111111111111111111111112', amount);
+        
+        if (txId) {
+          console.log(`AGT-06: ${eventType} for ${position.mint} (CLI SUCCESS), tx: ${txId}`);
+          
+          const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
+          
+          const envelope = createEnvelope('AGT-06', eventType, {
+            position_id: position.position_id,
+            mint: position.mint,
+            sell_portion: portion,
+            current_price: position.peak_price_sol,
+            realised_pnl_sol: realised_pnl_sol,
+            tx_signature: txId,
+          });
+          
+          updatePosition.run({
+            position_id: position.position_id,
+            state: 'CLOSED',
+            peak_price_sol: position.peak_price_sol,
+            exit_price_sol: exitPriceSol,
+            exit_tx_signature: txId,
+            realised_pnl_sol: realised_pnl_sol,
+            updated_at: new Date().toISOString()
+          });
+
+          // ✅ Evict from monitoring map so it is never retried
+          position.state = 'CLOSED';
+          this.positions.delete(position.position_id);
+
+          await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
+
+          // POST-SELL BALANCE CHECK — ensure sufficient funds for next trade
+          try {
+            const connection = new Connection(process.env.HELIUS_RPC_URL!);
+            const postSellBalance = await connection.getBalance(this.keypair.publicKey);
+            const postSellSol = postSellBalance / 1e9;
+            const positionSol = this.config?.trading?.position_size_sol || 0.005;
+            const priorityFeeSol = this.config?.trading?.priority_fee_sol || 0.005;
+            const ataRentSol = 0.00204;
+            const nextTradeCost = positionSol + priorityFeeSol + ataRentSol;
+            const canAfford = postSellSol >= nextTradeCost;
+            console.log(`AGT-06: [POST-SELL] Wallet balance: ${postSellSol.toFixed(6)} SOL`);
+            console.log(`AGT-06: [POST-SELL] Next trade needs: ${nextTradeCost.toFixed(6)} SOL (${positionSol} trade + ${priorityFeeSol} fee + ${ataRentSol} rent)`);
+            console.log(`AGT-06: [POST-SELL] ${canAfford ? '✅ Sufficient funds for next trade' : '⚠️ LOW BALANCE — top up wallet before next trade'}`);
+          } catch (balErr: any) {
+            console.warn(`AGT-06: [POST-SELL] Balance check failed: ${balErr.message}`);
+          }
+
+          return;
+        }
+      } catch (cliErr: any) {
+        // CLI failed (e.g. zero balance, network error) — mark FAILED and evict so we never retry
+        console.error(`AGT-06: [CLI-FAIL] CLI sell failed for ${position.mint.slice(0,8)}: ${cliErr.message}`);
+        position.state = 'FAILED';
+        this.positions.delete(position.position_id);
+        updatePosition.run({
+          position_id: position.position_id,
+          state: 'FAILED',
+          peak_price_sol: position.peak_price_sol,
+          exit_price_sol: null,
+          exit_tx_signature: null,
+          realised_pnl_sol: null,
+          updated_at: new Date().toISOString()
+        });
+        return; // Do NOT re-throw — just evict and move on
       }
-
-      this.keypair!.secretKey.fill(0);
-
-      const txId = await connection.sendRawTransaction(signedTxBytes);
-      await connection.confirmTransaction(txId);
-
-      console.log(`AGT-06: ${eventType} for ${position.mint}, sold ${portion*100}%, tx: ${txId}`);
-
-      const realised_pnl_sol = (position.peak_price_sol - position.entry_price_sol) * (position.tokens_received * portion);
-      
-      const envelope = createEnvelope('AGT-06', eventType, {
-        position_id: position.position_id,
-        mint: position.mint,
-        sell_portion: portion,
-        current_price: position.peak_price_sol,
-        realised_pnl_sol: realised_pnl_sol,
-        tx_signature: txId,
-      });
-      
-      // Update DB with final state and PnL
-      updatePosition.run({
-        position_id: position.position_id,
-        state: position.state,
-        peak_price_sol: position.peak_price_sol,
-        exit_price_sol: position.peak_price_sol,
-        exit_tx_signature: txId,
-        realised_pnl_sol: realised_pnl_sol,
-        updated_at: new Date().toISOString()
-      });
-      await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
-    } catch (error) {
-      console.log(`AGT-06: Sell failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
+    } catch (error: any) {
+      // Outer guard — evict position to prevent infinite retry
+      console.log(`AGT-06: [SELL-ERROR] Unexpected sell error for ${position.mint.slice(0,8)}: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
+      position.state = 'FAILED';
+      this.positions.delete(position.position_id);
     }
   }
 
@@ -559,12 +572,24 @@ export class SentinelAgent {
   async handlePositionOpened(envelopeJson: string): Promise<void> {
     try {
       const envelope: AgentMessageEnvelope = JSON.parse(envelopeJson);
-      const { mint, entryPriceSol, tokensReceived, position_id } = envelope.payload;
+      if (!envelope || !envelope.payload) return;
+
+      const { mint, entry_price_sol, tokens_received, position_id } = envelope.payload;
+      
+      const entryPriceSol = entry_price_sol ?? envelope.payload.entryPriceSol ?? 0;
+      const tokensReceived = tokens_received ?? envelope.payload.tokensReceived ?? 0;
+      const positionId = position_id ?? envelope.payload.positionId ?? envelope.correlation_id;
+
+      if (!mint || !positionId) {
+        console.error('AGT-06: Missing required fields in position_opened payload');
+        return;
+      }
+
       const position: Position = {
-        position_id,
+        position_id: positionId,
         mint,
         entry_price_sol: entryPriceSol,
-        entry_timestamp_utc: new Date().toISOString(),
+        entry_timestamp_utc: envelope.payload.entry_timestamp_utc || new Date().toISOString(),
         tokens_received: tokensReceived,
         state: 'OPEN',
         tp1_price: entryPriceSol * (this.config.trading?.tp1_multiplier || 2.0),
@@ -574,13 +599,65 @@ export class SentinelAgent {
         price_buffer: [],
       };
 
-      this.positions.set(position_id, position);
+      this.positions.set(positionId, position);
       console.log(`AGT-06: Monitoring new position: ${mint} at ${entryPriceSol} SOL`);
       
-      // Auto-save to DB if needed
-      // insertPosition.run(position);
+      // Auto-save to DB to keep in sync
+      insertPosition.run({
+        ...position,
+        entry_amount_sol: envelope.payload.position_size_sol || 0,
+        entry_tx_signature: envelope.payload.tx_signature || '',
+        entry_timestamp_utc: position.entry_timestamp_utc,
+        updated_at: new Date().toISOString()
+      });
     } catch (e: any) {
       console.error(`AGT-06: Error handling position opened message: ${e.message}`);
+    }
+  }
+
+  async monitorPositions(): Promise<void> {
+    if (this.positions.size === 0) {
+      await this.recoverPositions();
+    }
+
+    // Identify active positions to batch their price lookups
+    const activePositions = Array.from(this.positions.entries()).filter(
+      ([_, p]) => p.state !== 'CLOSED' && p.state !== 'FAILED'
+    );
+    
+    // Clean up closed/failed positions from map
+    for (const [id, position] of this.positions) {
+       if (position.state === 'CLOSED' || position.state === 'FAILED') {
+         this.positions.delete(id);
+       }
+    }
+
+    if (activePositions.length === 0) return;
+
+    // Fetch all prices in one single bulk request
+    const mintsToFetch = activePositions.map(([_, p]) => p.mint);
+    const batchPrices = await this.fetchPricesBatch(mintsToFetch);
+
+    // Process each active position
+    for (const [id, position] of activePositions) {
+      const price = batchPrices[position.mint] || 0;
+      await this.updatePositionState(position, price);
+      
+      if (price > 0) {
+        const entryPrice = position.entry_price_sol || 0.001;
+        const pnlPct = ((price - entryPrice) / entryPrice) * 100;
+        console.log(`AGT-06: [MONITOR] ${position.mint.slice(0, 8)} | Price: ${price.toFixed(9)} SOL | PnL: ${pnlPct.toFixed(2)}% | State: ${position.state} | Batch Size: ${mintsToFetch.length}`);
+        
+        // Update peak price in DB if it increased
+        if (price > (position.peak_price_sol || 0)) {
+          updatePosition.run({
+            position_id: position.position_id,
+            state: position.state,
+            peak_price_sol: price,
+            updated_at: new Date().toISOString()
+          });
+        }
+      }
     }
   }
 
@@ -638,33 +715,7 @@ export class SentinelAgent {
           continue;
         }
 
-        if (this.positions.size === 0) {
-          // Periodic check for DB recovery if empty
-          await this.recoverPositions();
-        }
-
-        for (const [id, position] of this.positions) {
-          if (position.state === 'CLOSED' || position.state === 'FAILED') continue;
-          
-          const price = await this.fetchPrice(position.mint);
-          if (price > 0) {
-            const entryPrice = position.entry_price_sol || 0.001;
-            const pnlPct = ((price - entryPrice) / entryPrice) * 100;
-            console.log(`AGT-06: [MONITOR] ${position.mint.slice(0, 8)} | Price: ${price.toFixed(9)} SOL | PnL: ${pnlPct.toFixed(2)}% | State: ${position.state}`);
-            
-            await this.updatePositionState(position, price);
-            
-            // Update peak price in DB if it increased
-            if (price > (position.peak_price_sol || 0)) {
-              updatePosition.run({
-                position_id: position.position_id,
-                state: position.state,
-                peak_price_sol: price,
-                updated_at: new Date().toISOString()
-              });
-            }
-          }
-        }
+        await this.monitorPositions();
       } catch (loopErr: any) {
         console.log(`AGT-06: [LOOP ERROR] ${loopErr.message}`);
       }
@@ -672,9 +723,34 @@ export class SentinelAgent {
     }
   }
 
+  private async executeViaCli(fromMint: string, toMint: string, amountRaw: number): Promise<string> {
+    try {
+      console.log(`AGT-06: [CLI-SELL] Executing (RTSE AUTO-SLIPPAGE): ${fromMint.slice(0, 8)} → ${toMint.slice(0, 8)}... (${amountRaw} raw)`);
+      
+      const cmd = `jup spot swap --from ${fromMint} --to ${toMint} --raw-amount ${amountRaw} --key sniper -f json`;
+      const output = execSync(cmd).toString();
+      const result = JSON.parse(output);
+      
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      return result.signature || result.txid || '';
+    } catch (e: any) {
+      console.error(`AGT-06: [CLI-ERROR] CLI swap failed: ${e.message}`);
+      throw e;
+    }
+  }
+
   async stop(): Promise<void> {
     this.running = false;
-    await this.redis.quit();
+    if (this.redis) {
+      try {
+        await this.redis.quit();
+      } catch (e) {
+        // Ignore quit errors
+      }
+    }
   }
 }
 
