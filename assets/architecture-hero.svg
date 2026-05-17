@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" font-family="system-ui,-apple-system,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="python" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="ts" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="infra" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="ext" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="dash" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.3"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="620" rx="16" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="600" y="42" text-anchor="middle" fill="#f8fafc" font-size="24" font-weight="700">MTUS System Architecture</text>
+  <text x="600" y="64" text-anchor="middle" fill="#94a3b8" font-size="13">MemeTrader Unified System — Multi-Agent Event-Driven Trading Platform</text>
+
+  <!-- External APIs Layer -->
+  <rect x="20" y="85" width="1160" height="70" rx="10" fill="#1a1a2e" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="20" y="80" fill="#f59e0b" font-size="11" font-weight="600" letter-spacing="1">EXTERNAL APIS</text>
+  <rect x="40" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="110" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">PumpDev WS</text>
+  <rect x="200" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="270" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Jupiter API</text>
+  <rect x="360" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="430" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">DexScreener</text>
+  <rect x="520" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="590" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Solana RPC</text>
+  <rect x="680" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="750" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">RugCheck</text>
+  <rect x="840" y="100" width="140" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="910" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Birdeye</text>
+  <rect x="1000" y="100" width="160" height="38" rx="8" fill="url(#ext)" filter="url(#shadow)"/>
+  <text x="1080" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Pump.fun API</text>
+
+  <!-- Python Agents Layer -->
+  <rect x="20" y="175" width="740" height="230" rx="10" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.3"/>
+  <text x="20" y="170" fill="#3b82f6" font-size="11" font-weight="600" letter-spacing="1">PYTHON AGENTS (7)</text>
+
+  <!-- Python Agent Nodes -->
+  <rect x="40" y="190" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="115" y="207" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-01 NofxAgent</text>
+  <text x="115" y="220" text-anchor="middle" fill="#dbeafe" font-size="8">Token Radar</text>
+
+  <rect x="210" y="190" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="285" y="207" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-02 HermesAgent</text>
+  <text x="285" y="220" text-anchor="middle" fill="#dbeafe" font-size="8">Event Router</text>
+
+  <rect x="380" y="190" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="455" y="207" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-03 AnansiAgent</text>
+  <text x="455" y="220" text-anchor="middle" fill="#dbeafe" font-size="8">Safety Gates (G1-G11)</text>
+
+  <rect x="550" y="190" width="190" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="645" y="207" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-04 Oracle</text>
+  <text x="645" y="220" text-anchor="middle" fill="#dbeafe" font-size="8">Price Polling</text>
+
+  <rect x="40" y="245" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="115" y="262" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-08 CassandraAgent</text>
+  <text x="115" y="275" text-anchor="middle" fill="#dbeafe" font-size="8">Social Sentiment</text>
+
+  <rect x="210" y="245" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="285" y="262" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-09 LedgerAgent</text>
+  <text x="285" y="275" text-anchor="middle" fill="#dbeafe" font-size="8">Audit Trail</text>
+
+  <rect x="380" y="245" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="455" y="262" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-10 HeraclesAgent</text>
+  <text x="455" y="275" text-anchor="middle" fill="#dbeafe" font-size="8">Guardian / Kill Switch</text>
+
+  <rect x="550" y="245" width="190" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="645" y="262" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-12 HydraAgent</text>
+  <text x="645" y="275" text-anchor="middle" fill="#dbeafe" font-size="8">Trend &amp; Bonding Curve Monitor</text>
+
+  <rect x="40" y="300" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="115" y="317" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-13 PortfolioSizer</text>
+  <text x="115" y="330" text-anchor="middle" fill="#dbeafe" font-size="8">Dynamic Position Sizing</text>
+
+  <rect x="210" y="300" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="285" y="317" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-11 DashboardBridge</text>
+  <text x="285" y="330" text-anchor="middle" fill="#dbeafe" font-size="8">WebSocket Server</text>
+
+  <rect x="380" y="300" width="150" height="40" rx="8" fill="url(#python)" filter="url(#shadow)"/>
+  <text x="455" y="317" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">Telegram Bot</text>
+  <text x="455" y="330" text-anchor="middle" fill="#dbeafe" font-size="8">Admin Commands (OTP)</text>
+
+  <!-- TypeScript Agents Layer -->
+  <rect x="20" y="425" width="740" height="130" rx="10" fill="#164e63" stroke="#06b6d4" stroke-width="1" stroke-opacity="0.3"/>
+  <text x="20" y="420" fill="#06b6d4" font-size="11" font-weight="600" letter-spacing="1">TYPESCRIPT AGENTS (3)</text>
+
+  <rect x="60" y="445" width="200" height="40" rx="8" fill="url(#ts)" filter="url(#shadow)"/>
+  <text x="160" y="462" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-05 Ares</text>
+  <text x="160" y="475" text-anchor="middle" fill="#ecfeff" font-size="8">Trade Executor (Jupiter Swaps)</text>
+
+  <rect x="280" y="445" width="200" height="40" rx="8" fill="url(#ts)" filter="url(#shadow)"/>
+  <text x="380" y="462" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-06 Sentinel</text>
+  <text x="380" y="475" text-anchor="middle" fill="#ecfeff" font-size="8">TP/SL State Machine Monitor</text>
+
+  <rect x="500" y="445" width="200" height="40" rx="8" fill="url(#ts)" filter="url(#shadow)"/>
+  <text x="600" y="462" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">AGT-07 Janus</text>
+  <text x="600" y="475" text-anchor="middle" fill="#ecfeff" font-size="8">Capital Sweep &amp; Wallet Mgmt</text>
+
+  <rect x="60" y="500" width="200" height="40" rx="8" fill="url(#ts)" filter="url(#shadow)"/>
+  <text x="160" y="517" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">MTUS-MCP Server</text>
+  <text x="160" y="530" text-anchor="middle" fill="#ecfeff" font-size="8">AI Tool Integration (13 Tools)</text>
+
+  <!-- Infrastructure Layer -->
+  <rect x="780" y="175" width="400" height="380" rx="10" fill="#2e1065" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.3"/>
+  <text x="780" y="170" fill="#8b5cf6" font-size="11" font-weight="600" letter-spacing="1">INFRASTRUCTURE</text>
+
+  <rect x="800" y="195" width="160" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="880" y="217" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Redis 7.x</text>
+  <text x="880" y="234" text-anchor="middle" fill="#ede9fe" font-size="9">Pub/Sub Message Bus</text>
+
+  <rect x="980" y="195" width="180" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="1070" y="217" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">PostgreSQL</text>
+  <text x="1070" y="234" text-anchor="middle" fill="#ede9fe" font-size="9">Positions + Audit Ledger</text>
+
+  <rect x="800" y="265" width="160" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="880" y="287" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Keystores</text>
+  <text x="880" y="304" text-anchor="middle" fill="#ede9fe" font-size="9">Argon2id + XSalsa20</text>
+
+  <rect x="980" y="265" width="180" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="1070" y="287" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Process Manager</text>
+  <text x="1070" y="304" text-anchor="middle" fill="#ede9fe" font-size="9">PM2 + Supervisor</text>
+
+  <rect x="800" y="335" width="360" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="980" y="357" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Shared Modules (55+)</text>
+  <text x="980" y="374" text-anchor="middle" fill="#ede9fe" font-size="9">Envelope, Circuit Breaker, Rate Limiter, Validators, Constants</text>
+
+  <rect x="800" y="405" width="360" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="980" y="427" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Test Suite (327 Tests)</text>
+  <text x="980" y="444" text-anchor="middle" fill="#ede9fe" font-size="9">Unit, Integration, E2E, Chaos, Security</text>
+
+  <rect x="800" y="475" width="360" height="50" rx="10" fill="url(#infra)" filter="url(#shadow)"/>
+  <text x="980" y="497" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Configuration</text>
+  <text x="980" y="514" text-anchor="middle" fill="#ede9fe" font-size="9">config.yaml, .env, Redis Runtime Keys</text>
+
+  <!-- Dashboard Layer -->
+  <rect x="20" y="570" width="740" height="40" rx="10" fill="#064e3b" stroke="#10b981" stroke-width="1" stroke-opacity="0.3"/>
+  <text x="20" y="565" fill="#10b981" font-size="11" font-weight="600" letter-spacing="1">DASHBOARD</text>
+  <rect x="60" y="578" width="180" height="24" rx="6" fill="url(#dash)" filter="url(#shadow)"/>
+  <text x="150" y="594" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">Next.js 16 + React 19</text>
+  <rect x="260" y="578" width="120" height="24" rx="6" fill="url(#dash)" filter="url(#shadow)"/>
+  <text x="320" y="594" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">Tailwind CSS 4</text>
+  <rect x="400" y="578" width="120" height="24" rx="6" fill="url(#dash)" filter="url(#shadow)"/>
+  <text x="460" y="594" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">Recharts</text>
+  <rect x="540" y="578" width="120" height="24" rx="6" fill="url(#dash)" filter="url(#shadow)"/>
+  <text x="600" y="594" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">WebSocket</text>
+  <rect x="680" y="578" width="70" height="24" rx="6" fill="url(#dash)" filter="url(#shadow)"/>
+  <text x="715" y="594" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">PWA</text>
+
+  <!-- Connection Lines -->
+  <!-- PumpDev WS -> NofxAgent -->
+  <line x1="110" y1="138" x2="115" y2="190" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
+  <!-- Jupiter -> Ares + Oracle -->
+  <line x1="270" y1="138" x2="160" y2="445" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
+  <line x1="270" y1="138" x2="645" y2="190" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
+  <!-- RPC -> Ares -->
+  <line x1="590" y1="138" x2="160" y2="445" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
+  <!-- Pump.fun -> Hydra -->
+  <line x1="1080" y1="138" x2="645" y2="245" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
+
+  <!-- Internal flow arrows (simplified) -->
+  <line x1="190" y1="210" x2="210" y2="210" stroke="#60a5fa" stroke-width="1.5" opacity="0.5"/>
+  <line x1="360" y1="210" x2="380" y2="210" stroke="#60a5fa" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- Redis <-> Agents -->
+  <line x1="760" y1="220" x2="780" y2="220" stroke="#8b5cf6" stroke-width="2" opacity="0.5"/>
+  <line x1="760" y1="465" x2="780" y2="465" stroke="#8b5cf6" stroke-width="2" opacity="0.5"/>
+
+  <!-- Dashboard <-> Bridge -->
+  <line x1="285" y1="340" x2="285" y2="570" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+
+  <!-- Footer -->
+  <text x="600" y="610" text-anchor="middle" fill="#64748b" font-size="10">13 Agents | 2 Languages | Redis Pub/Sub | PostgreSQL | Paper &amp; Production Modes</text>
+</svg>

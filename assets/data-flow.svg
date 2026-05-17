@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" font-family="system-ui,-apple-system,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="s1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="s2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="s3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="s4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="s5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="500" rx="16" fill="url(#bg)"/>
+  <text x="600" y="38" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">MTUS Data Flow — Token Lifecycle</text>
+  <text x="600" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">From token detection to position closure</text>
+
+  <!-- Step 1: Detection -->
+  <rect x="30" y="90" width="170" height="80" rx="10" fill="url(#s1)" filter="url(#shadow)"/>
+  <text x="115" y="120" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">1. DETECTION</text>
+  <text x="115" y="138" text-anchor="middle" fill="#fef3c7" font-size="10">AGT-01 NofxAgent</text>
+  <text x="115" y="155" text-anchor="middle" fill="#fef3c7" font-size="10">PumpDev WebSocket</text>
+
+  <!-- Arrow 1->2 -->
+  <line x1="200" y1="130" x2="240" y2="130" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="240,125 250,130 240,135" fill="#60a5fa"/>
+  <text x="225" y="120" text-anchor="middle" fill="#94a3b8" font-size="9">token_detected</text>
+
+  <!-- Step 2: Routing -->
+  <rect x="250" y="90" width="170" height="80" rx="10" fill="url(#s2)" filter="url(#shadow)"/>
+  <text x="335" y="120" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">2. ROUTING</text>
+  <text x="335" y="138" text-anchor="middle" fill="#dbeafe" font-size="10">AGT-02 HermesAgent</text>
+  <text x="335" y="155" text-anchor="middle" fill="#dbeafe" font-size="10">Redis Pub/Sub</text>
+
+  <!-- Arrow 2->3 (parallel) -->
+  <line x1="420" y1="115" x2="460" y2="115" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="460,110 470,115 460,120" fill="#60a5fa"/>
+  <line x1="420" y1="145" x2="460" y2="145" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="460,140 470,145 460,150" fill="#60a5fa"/>
+  <text x="445" y="108" text-anchor="middle" fill="#94a3b8" font-size="8">token_received</text>
+  <text x="445" y="165" text-anchor="middle" fill="#94a3b8" font-size="8">token_received_social</text>
+
+  <!-- Step 3a: Safety -->
+  <rect x="470" y="80" width="170" height="70" rx="10" fill="url(#s3)" filter="url(#shadow)"/>
+  <text x="555" y="108" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">3a. SAFETY GATES</text>
+  <text x="555" y="125" text-anchor="middle" fill="#ede9fe" font-size="10">AGT-03 AnansiAgent</text>
+  <text x="555" y="140" text-anchor="middle" fill="#ede9fe" font-size="10">11-Gate Pipeline</text>
+
+  <!-- Step 3b: Sentiment -->
+  <rect x="470" y="165" width="170" height="55" rx="10" fill="url(#s3)" filter="url(#shadow)" opacity="0.8"/>
+  <text x="555" y="188" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">3b. SENTIMENT</text>
+  <text x="555" y="205" text-anchor="middle" fill="#ede9fe" font-size="10">AGT-08 CassandraAgent</text>
+
+  <!-- Merge arrows -->
+  <line x1="640" y1="115" x2="680" y2="140" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="675,135 685,140 675,145" fill="#60a5fa"/>
+  <line x1="640" y1="192" x2="680" y2="148" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="675,143 685,148 675,153" fill="#60a5fa"/>
+
+  <!-- Step 4: Execution -->
+  <rect x="690" y="110" width="170" height="80" rx="10" fill="url(#s4)" filter="url(#shadow)"/>
+  <text x="775" y="140" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">4. EXECUTION</text>
+  <text x="775" y="158" text-anchor="middle" fill="#ecfeff" font-size="10">AGT-05 Ares</text>
+  <text x="775" y="175" text-anchor="middle" fill="#ecfeff" font-size="10">Jupiter Swap + PostgreSQL</text>
+
+  <!-- Arrow 4->5 -->
+  <line x1="860" y1="150" x2="900" y2="150" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="900,145 910,150 900,155" fill="#60a5fa"/>
+  <text x="885" y="140" text-anchor="middle" fill="#94a3b8" font-size="9">position_opened</text>
+
+  <!-- Step 5: Monitoring -->
+  <rect x="910" y="110" width="170" height="80" rx="10" fill="url(#s5)" filter="url(#shadow)"/>
+  <text x="995" y="140" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">5. MONITORING</text>
+  <text x="995" y="158" text-anchor="middle" fill="#d1fae5" font-size="10">AGT-06 Sentinel</text>
+  <text x="995" y="175" text-anchor="middle" fill="#d1fae5" font-size="10">TP/SL State Machine</text>
+
+  <!-- Arrow 5->6 -->
+  <line x1="995" y1="190" x2="995" y2="220" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="990,220 995,230 1000,220" fill="#60a5fa"/>
+
+  <!-- Step 6: Closure -->
+  <rect x="910" y="230" width="170" height="70" rx="10" fill="url(#s5)" filter="url(#shadow)"/>
+  <text x="995" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">6. CLOSURE</text>
+  <text x="995" y="275" text-anchor="middle" fill="#d1fae5" font-size="10">TP1/TP2/SL/Trailing</text>
+  <text x="995" y="290" text-anchor="middle" fill="#d1fae5" font-size="10">position_closed event</text>
+
+  <!-- Arrow 6->7 -->
+  <line x1="910" y1="265" x2="870" y2="265" stroke="#60a5fa" stroke-width="2"/>
+  <polygon points="870,260 860,265 870,270" fill="#60a5fa"/>
+
+  <!-- Step 7: Portfolio Sizing -->
+  <rect x="690" y="230" width="170" height="70" rx="10" fill="url(#s2)" filter="url(#shadow)"/>
+  <text x="775" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">7. RESIZE</text>
+  <text x="775" y="275" text-anchor="middle" fill="#dbeafe" font-size="10">AGT-13 PortfolioSizer</text>
+  <text x="775" y="290" text-anchor="middle" fill="#dbeafe" font-size="10">Dynamic PnL Compounding</text>
+
+  <!-- Parallel: Audit (bottom) -->
+  <rect x="30" y="270" width="300" height="70" rx="10" fill="#1e293b" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="180" y="298" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="700">PARALLEL: AGT-09 LedgerAgent</text>
+  <text x="180" y="315" text-anchor="middle" fill="#64748b" font-size="10">Audit trail to PostgreSQL (append-only)</text>
+  <text x="180" y="330" text-anchor="middle" fill="#64748b" font-size="10">All events recorded: detection, approval, trade, closure</text>
+
+  <!-- Parallel: Guardian (bottom) -->
+  <rect x="350" y="270" width="300" height="70" rx="10" fill="#1e293b" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="500" y="298" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="700">PARALLEL: AGT-10 HeraclesAgent</text>
+  <text x="500" y="315" text-anchor="middle" fill="#64748b" font-size="10">Health monitoring, kill switch, mainnet readiness</text>
+  <text x="500" y="330" text-anchor="middle" fill="#64748b" font-size="10">Continuous watchdog over all agents</text>
+
+  <!-- Parallel: Hydra (bottom) -->
+  <rect x="670" y="270" width="260" height="70" rx="10" fill="#1e293b" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="800" y="298" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="700">PARALLEL: AGT-12 HydraAgent</text>
+  <text x="800" y="315" text-anchor="middle" fill="#64748b" font-size="10">Trending tokens, bonding curve monitoring</text>
+  <text x="800" y="330" text-anchor="middle" fill="#64748b" font-size="10">Pump.fun + DexScreener APIs</text>
+
+  <!-- Oracle loop -->
+  <rect x="950" y="270" width="220" height="70" rx="10" fill="#1e293b" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="1060" y="298" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="700">PARALLEL: AGT-04 Oracle</text>
+  <text x="1060" y="315" text-anchor="middle" fill="#64748b" font-size="10">Price polling every 5s</text>
+  <text x="1060" y="330" text-anchor="middle" fill="#64748b" font-size="10">Jupiter V3 + DexScreener + Birdeye</text>
+
+  <!-- Oracle -> Sentinel arrow -->
+  <line x1="1060" y1="270" x2="1060" y2="190" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <polygon points="1055,195 1060,185 1065,195" fill="#06b6d4"/>
+  <text x="1080" y="230" fill="#06b6d4" font-size="9">price_updated</text>
+
+  <!-- Dashboard notification -->
+  <rect x="30" y="370" width="1140" height="55" rx="10" fill="#064e3b" stroke="#10b981" stroke-width="1" filter="url(#shadow)"/>
+  <text x="600" y="395" text-anchor="middle" fill="#10b981" font-size="14" font-weight="700">NOTIFICATIONS: AGT-11 DashboardBridge + Telegram Bot</text>
+  <text x="600" y="413" text-anchor="middle" fill="#6ee7b7" font-size="10">WebSocket events to Next.js Dashboard | Telegram messages to admin (OTP-protected commands)</text>
+
+  <!-- Key channels -->
+  <rect x="30" y="445" width="1140" height="45" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="600" y="465" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600">Key Redis Channels:</text>
+  <text x="600" y="482" text-anchor="middle" fill="#64748b" font-size="10">mtus:channel:token_detected → token_received → trade_approved / trade_failed → position_opened → position_closed</text>
+</svg>

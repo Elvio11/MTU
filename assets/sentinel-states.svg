@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" font-family="system-ui,-apple-system,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="open" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="tp1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="tp2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="trail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="sl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="closed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="600" rx="16" fill="url(#bg)"/>
+  <text x="400" y="38" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Sentinel TP/SL State Machine</text>
+  <text x="400" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">AGT-06: Position lifecycle from entry to exit</text>
+
+  <!-- OPEN state -->
+  <rect x="310" y="90" width="180" height="60" rx="12" fill="url(#open)" filter="url(#shadow)" stroke="#60a5fa" stroke-width="2"/>
+  <text x="400" y="115" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">OPEN</text>
+  <text x="400" y="135" text-anchor="middle" fill="#dbeafe" font-size="10">Entry price set, watching</text>
+
+  <!-- OPEN -> TP1 -->
+  <line x1="310" y1="120" x2="200" y2="120" stroke="#10b981" stroke-width="2"/>
+  <polygon points="205,115 195,120 205,125" fill="#10b981"/>
+  <text x="240" y="110" text-anchor="middle" fill="#10b981" font-size="10" font-weight="600">price ≥ entry × 2.0</text>
+
+  <!-- TP1 state -->
+  <rect x="30" y="90" width="160" height="60" rx="12" fill="url(#tp1)" filter="url(#shadow)" stroke="#34d399" stroke-width="2"/>
+  <text x="110" y="115" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">TAKE_PROFIT_1</text>
+  <text x="110" y="135" text-anchor="middle" fill="#d1fae5" font-size="10">Sold 50%, trailing 15%</text>
+
+  <!-- OPEN -> SL -->
+  <line x1="490" y1="120" x2="600" y2="120" stroke="#ef4444" stroke-width="2"/>
+  <polygon points="595,115 605,120 595,125" fill="#ef4444"/>
+  <text x="560" y="110" text-anchor="middle" fill="#ef4444" font-size="10" font-weight="600">price ≤ entry × 0.7</text>
+
+  <!-- SL state -->
+  <rect x="610" y="90" width="160" height="60" rx="12" fill="url(#sl)" filter="url(#shadow)" stroke="#f87171" stroke-width="2"/>
+  <text x="690" y="115" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">STOP_LOSS</text>
+  <text x="690" y="135" text-anchor="middle" fill="#fecaca" font-size="10">Sell 100%, exit</text>
+
+  <!-- OPEN -> Time SL -->
+  <line x1="400" y1="150" x2="400" y2="200" stroke="#f59e0b" stroke-width="2"/>
+  <polygon points="395,195 400,205 405,195" fill="#f59e0b"/>
+  <text x="420" y="180" fill="#f59e0b" font-size="10" font-weight="600">4h without TP1</text>
+
+  <!-- Time SL state -->
+  <rect x="310" y="210" width="180" height="55" rx="12" fill="url(#sl)" filter="url(#shadow)" stroke="#fbbf24" stroke-width="2" opacity="0.9"/>
+  <text x="400" y="235" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">TIME_SL</text>
+  <text x="400" y="253" text-anchor="middle" fill="#fef3c7" font-size="10">Force exit after 4 hours</text>
+
+  <!-- TP1 -> TRAILING -->
+  <line x1="110" y1="150" x2="110" y2="200" stroke="#8b5cf6" stroke-width="2"/>
+  <polygon points="105,195 110,205 115,195" fill="#8b5cf6"/>
+  <text x="130" y="180" fill="#8b5cf6" font-size="10" font-weight="600">price ≤ peak × 0.85</text>
+
+  <!-- TRAILING state -->
+  <rect x="30" y="210" width="160" height="55" rx="12" fill="url(#trail)" filter="url(#shadow)" stroke="#a78bfa" stroke-width="2"/>
+  <text x="110" y="235" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">TRAILING</text>
+  <text x="110" y="253" text-anchor="middle" fill="#ede9fe" font-size="10">Selling remaining 50%</text>
+
+  <!-- TP1 -> TP2 -->
+  <line x1="30" y1="120" x2="30" y2="300" stroke="#06b6d4" stroke-width="2"/>
+  <line x1="30" y1="300" x2="110" y2="300" stroke="#06b6d4" stroke-width="2"/>
+  <polygon points="105,295 115,300 105,305" fill="#06b6d4"/>
+  <text x="60" y="290" text-anchor="middle" fill="#06b6d4" font-size="10" font-weight="600">price ≥ entry × 5.0</text>
+
+  <!-- TP2 state -->
+  <rect x="120" y="270" width="160" height="60" rx="12" fill="url(#tp2)" filter="url(#shadow)" stroke="#22d3ee" stroke-width="2"/>
+  <text x="200" y="295" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">TAKE_PROFIT_2</text>
+  <text x="200" y="315" text-anchor="middle" fill="#ecfeff" font-size="10">Sell remaining 50%</text>
+
+  <!-- All exit states -> CLOSED -->
+  <!-- SL -> CLOSED -->
+  <line x1="690" y1="150" x2="690" y2="400" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <polygon points="685,395 690,405 695,395" fill="#64748b"/>
+  <text x="710" y="280" fill="#64748b" font-size="9">sell 100%</text>
+
+  <!-- Time SL -> CLOSED -->
+  <line x1="490" y1="237" x2="600" y2="237" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <line x1="600" y1="237" x2="600" y2="400" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <polygon points="595,395 600,405 605,395" fill="#64748b"/>
+
+  <!-- TRAILING -> CLOSED -->
+  <line x1="110" y1="265" x2="110" y2="400" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <line x1="110" y1="400" x2="380" y2="400" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <polygon points="375,395 385,400 375,405" fill="#64748b"/>
+
+  <!-- TP2 -> CLOSED -->
+  <line x1="280" y1="300" x2="380" y2="300" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <line x1="380" y1="300" x2="380" y2="390" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3"/>
+  <polygon points="375,385 380,395 385,385" fill="#64748b"/>
+
+  <!-- CLOSED state -->
+  <rect x="310" y="400" width="180" height="60" rx="12" fill="url(#closed)" filter="url(#shadow)" stroke="#94a3b8" stroke-width="2"/>
+  <text x="400" y="425" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">CLOSED</text>
+  <text x="400" y="445" text-anchor="middle" fill="#e2e8f0" font-size="10">Position fully exited</text>
+
+  <!-- FAILED state -->
+  <rect x="550" y="400" width="180" height="60" rx="12" fill="#1e293b" stroke="#ef4444" stroke-width="2" filter="url(#shadow)"/>
+  <text x="640" y="425" text-anchor="middle" fill="#ef4444" font-size="16" font-weight="700">FAILED</text>
+  <text x="640" y="445" text-anchor="middle" fill="#fca5a5" font-size="10">Trade execution failed</text>
+
+  <!-- Arrow from OPEN to FAILED (trade_approved -> execution fail) -->
+  <line x1="490" y1="150" x2="640" y2="390" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <polygon points="635,385 645,395 635,395" fill="#ef4444"/>
+
+  <!-- Legend -->
+  <rect x="30" y="490" width="740" height="95" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="400" y="510" text-anchor="middle" fill="#f8fafc" font-size="12" font-weight="700">Exit Conditions &amp; Actions</text>
+
+  <text x="60" y="535" fill="#10b981" font-size="11" font-weight="600">TP1 (2x): </text>
+  <text x="130" y="535" fill="#94a3b8" font-size="11">Sell 50%, set trailing stop at 85% of peak</text>
+
+  <text x="60" y="555" fill="#06b6d4" font-size="11" font-weight="600">TP2 (5x): </text>
+  <text x="130" y="555" fill="#94a3b8" font-size="11">Sell remaining 50%, position closed</text>
+
+  <text x="400" y="535" fill="#ef4444" font-size="11" font-weight="600">SL (0.7x): </text>
+  <text x="465" y="535" fill="#94a3b8" font-size="11">Sell 100%, stop loss triggered</text>
+
+  <text x="400" y="555" fill="#f59e0b" font-size="11" font-weight="600">Time SL: </text>
+  <text x="475" y="555" fill="#94a3b8" font-size="11">Force sell after 4 hours without TP1</text>
+
+  <text x="60" y="575" fill="#8b5cf6" font-size="11" font-weight="600">Trailing: </text>
+  <text x="130" y="575" fill="#94a3b8" font-size="11">Sell remaining 50% when price drops 15% from peak</text>
+</svg>

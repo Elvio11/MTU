@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="system-ui,-apple-system,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="gate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="gate-fail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="620" rx="16" fill="url(#bg)"/>
+  <text x="500" y="38" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">11-Gate Safety Qualification Pipeline</text>
+  <text x="500" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">AGT-03 AnansiAgent — All gates must pass for trade approval</text>
+
+  <!-- G7 and G11 are always run first (pre-filters) -->
+  <rect x="350" y="80" width="300" height="50" rx="10" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="500" y="100" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">PRE-FILTERS (Always Run First)</text>
+  <text x="500" y="118" text-anchor="middle" fill="#60a5fa" font-size="10">Fast rejection before expensive checks</text>
+
+  <!-- G7 -->
+  <rect x="60" y="155" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="160" y="178" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G7: Market Cap</text>
+  <text x="160" y="198" text-anchor="middle" fill="#d1fae5" font-size="11">5-150 SOL range</text>
+
+  <!-- G11 -->
+  <rect x="300" y="155" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="400" y="178" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G11: Bonding Curve</text>
+  <text x="400" y="198" text-anchor="middle" fill="#d1fae5" font-size="11">≥30 SOL in curve</text>
+
+  <!-- G1 -->
+  <rect x="540" y="155" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="640" y="178" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G1: Mint Authority</text>
+  <text x="640" y="198" text-anchor="middle" fill="#d1fae5" font-size="11">Must be revoked (null)</text>
+
+  <!-- G2 -->
+  <rect x="780" y="155" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="880" y="178" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G2: Freeze Authority</text>
+  <text x="880" y="198" text-anchor="middle" fill="#d1fae5" font-size="11">Must be revoked (null)</text>
+
+  <!-- G3 -->
+  <rect x="60" y="235" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="160" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G3: LP Burned</text>
+  <text x="160" y="278" text-anchor="middle" fill="#d1fae5" font-size="11">≥85% burned</text>
+
+  <!-- G4 -->
+  <rect x="300" y="235" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="400" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G4: Dev Holdings</text>
+  <text x="400" y="278" text-anchor="middle" fill="#d1fae5" font-size="11">&lt;5% (disabled pump.fun)</text>
+
+  <!-- G5 -->
+  <rect x="540" y="235" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="640" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G5: Top 10 Concentration</text>
+  <text x="640" y="278" text-anchor="middle" fill="#d1fae5" font-size="11">&lt;30% held by top 10</text>
+
+  <!-- G6 -->
+  <rect x="780" y="235" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="880" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G6: RugCheck Score</text>
+  <text x="880" y="278" text-anchor="middle" fill="#d1fae5" font-size="11">Score ≤999</text>
+
+  <!-- G8 -->
+  <rect x="60" y="315" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="160" y="338" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G8: Social Metadata</text>
+  <text x="160" y="358" text-anchor="middle" fill="#d1fae5" font-size="11">≥1 social link present</text>
+
+  <!-- G9 -->
+  <rect x="300" y="315" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="400" y="338" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G9: Duplicate Check</text>
+  <text x="400" y="358" text-anchor="middle" fill="#d1fae5" font-size="11">Not seen in 24h (Redis)</text>
+
+  <!-- G10 -->
+  <rect x="540" y="315" width="200" height="55" rx="10" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="640" y="338" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">G10: Honeypot Check</text>
+  <text x="640" y="358" text-anchor="middle" fill="#d1fae5" font-size="11">No freeze/mint authority</text>
+
+  <!-- Decision diamond -->
+  <polygon points="500,420 600,460 500,500 400,460" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="500" y="455" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="700">ALL PASS?</text>
+  <text x="500" y="472" text-anchor="middle" fill="#60a5fa" font-size="10">Required gates</text>
+
+  <!-- YES path -->
+  <line x1="500" y1="500" x2="500" y2="540" stroke="#10b981" stroke-width="3"/>
+  <polygon points="495,535 500,545 505,535" fill="#10b981"/>
+  <text x="520" y="525" fill="#10b981" font-size="12" font-weight="700">YES</text>
+
+  <!-- APPROVED -->
+  <rect x="380" y="545" width="240" height="50" rx="12" fill="url(#gate)" filter="url(#shadow)"/>
+  <text x="500" y="567" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">TRADE APPROVED</text>
+  <text x="500" y="585" text-anchor="middle" fill="#d1fae5" font-size="10">mtus:channel:trade_approved → AGT-05 Ares</text>
+
+  <!-- NO path -->
+  <line x1="400" y1="460" x2="250" y2="460" stroke="#ef4444" stroke-width="3"/>
+  <line x1="250" y1="460" x2="250" y2="540" stroke="#ef4444" stroke-width="3"/>
+  <polygon points="245,535 250,545 255,535" fill="#ef4444"/>
+  <text x="300" y="450" fill="#ef4444" font-size="12" font-weight="700">NO</text>
+
+  <!-- FAILED -->
+  <rect x="130" y="545" width="240" height="50" rx="12" fill="url(#gate-fail)" filter="url(#shadow)"/>
+  <text x="250" y="567" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">TRADE FAILED</text>
+  <text x="250" y="585" text-anchor="middle" fill="#fecaca" font-size="10">mtus:channel:trade_failed</text>
+
+  <!-- Required gates note -->
+  <rect x="620" y="420" width="350" height="175" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="795" y="445" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">Required Gates (Paper Mode)</text>
+  <text x="650" y="470" fill="#10b981" font-size="11">G1, G2, G7, G10, G11 — Always enforced</text>
+  <text x="650" y="495" fill="#94a3b8" font-size="11">G3-G6, G8, G9 — Skipped in paper mode</text>
+  <text x="650" y="520" fill="#94a3b8" font-size="11">G3-G9 — Enforced in production mode</text>
+  <text x="650" y="550" fill="#f59e0b" font-size="11" font-weight="600">Sources: RugCheck API, Solana RPC,</text>
+  <text x="650" y="568" fill="#f59e0b" font-size="11" font-weight="600">getTokenLargestAccounts, Redis dedup</text>
+
+  <!-- Flow arrows between gates -->
+  <line x1="260" y1="182" x2="300" y2="182" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="500" y1="182" x2="540" y2="182" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="740" y1="182" x2="780" y2="182" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="260" y1="262" x2="300" y2="262" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="500" y1="262" x2="540" y2="262" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="740" y1="262" x2="780" y2="262" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="260" y1="342" x2="300" y2="342" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="500" y1="342" x2="540" y2="342" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Arrows from pre-filters to row 1 -->
+  <line x1="500" y1="130" x2="160" y2="155" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="500" y1="130" x2="400" y2="155" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="500" y1="130" x2="640" y2="155" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="500" y1="130" x2="880" y2="155" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Arrows from row 1 to row 2 -->
+  <line x1="160" y1="210" x2="160" y2="235" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="400" y1="210" x2="400" y2="235" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="640" y1="210" x2="640" y2="235" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="880" y1="210" x2="880" y2="235" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Arrows from row 2 to row 3 -->
+  <line x1="160" y1="290" x2="160" y2="315" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="400" y1="290" x2="400" y2="315" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="640" y1="290" x2="640" y2="315" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Arrows from last row to decision -->
+  <line x1="160" y1="370" x2="400" y2="460" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="400" y1="370" x2="450" y2="460" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="640" y1="370" x2="550" y2="460" stroke="#64748b" stroke-width="1" stroke-dasharray="3,2"/>
+</svg>

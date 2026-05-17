@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" font-family="system-ui,-apple-system,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="p1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="p2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="p3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="400" rx="16" fill="url(#bg)"/>
+  <text x="400" y="38" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Priority Queue Scoring</text>
+  <text x="400" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">AGT-01 NofxAgent — Redis Sorted Set (lower score = higher priority)</text>
+
+  <!-- Formula -->
+  <rect x="150" y="80" width="500" height="45" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="400" y="108" text-anchor="middle" fill="#e2e8f0" font-size="14" font-weight="600">Score = Priority * 10^12 + Timestamp</text>
+
+  <!-- Priority 1 -->
+  <rect x="40" y="150" width="220" height="120" rx="12" fill="url(#p1)" filter="url(#shadow)"/>
+  <text x="150" y="180" text-anchor="middle" fill="#fff" font-size="18" font-weight="800">P1 — HIGHEST</text>
+  <text x="150" y="205" text-anchor="middle" fill="#fecaca" font-size="13">Migration Events</text>
+  <text x="150" y="230" text-anchor="middle" fill="#fecaca" font-size="12">complete, create_pool</text>
+  <text x="150" y="255" text-anchor="middle" fill="#fecaca" font-size="12">Score: 1 * 10^12 + ts</text>
+
+  <!-- Priority 2 -->
+  <rect x="290" y="150" width="220" height="120" rx="12" fill="url(#p2)" filter="url(#shadow)"/>
+  <text x="400" y="180" text-anchor="middle" fill="#fff" font-size="18" font-weight="800">P2 — MEDIUM</text>
+  <text x="400" y="205" text-anchor="middle" fill="#fef3c7" font-size="13">Bonding Curve</text>
+  <text x="400" y="230" text-anchor="middle" fill="#fef3c7" font-size="12">≥30 SOL in curve</text>
+  <text x="400" y="255" text-anchor="middle" fill="#fef3c7" font-size="12">Score: 2 * 10^12 + ts</text>
+
+  <!-- Priority 3 -->
+  <rect x="540" y="150" width="220" height="120" rx="12" fill="url(#p3)" filter="url(#shadow)"/>
+  <text x="650" y="180" text-anchor="middle" fill="#fff" font-size="18" font-weight="800">P3 — LOWEST</text>
+  <text x="650" y="205" text-anchor="middle" fill="#d1fae5" font-size="13">New Token Creations</text>
+  <text x="650" y="230" text-anchor="middle" fill="#d1fae5" font-size="12">create events</text>
+  <text x="650" y="255" text-anchor="middle" fill="#d1fae5" font-size="12">Score: 3 * 10^12 + ts</text>
+
+  <!-- Arrows showing order -->
+  <line x1="260" y1="210" x2="285" y2="210" stroke="#64748b" stroke-width="2"/>
+  <polygon points="280,205 290,210 280,215" fill="#64748b"/>
+  <line x1="510" y1="210" x2="535" y2="210" stroke="#64748b" stroke-width="2"/>
+  <polygon points="530,205 540,210 530,215" fill="#64748b"/>
+
+  <!-- Redis key -->
+  <rect x="150" y="300" width="500" height="45" rx="10" fill="#1e293b" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="400" y="327" text-anchor="middle" fill="#c4b5fd" font-size="14" font-weight="600">Redis Key: mtus:trade_queue (Sorted Set)</text>
+
+  <!-- Explanation -->
+  <rect x="40" y="360" width="720" height="30" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="400" y="380" text-anchor="middle" fill="#94a3b8" font-size="11">Tokens are dequeued from lowest score first. Timestamp ensures FIFO within same priority level.</text>
+</svg>
