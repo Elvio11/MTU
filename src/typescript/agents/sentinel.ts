@@ -12,7 +12,7 @@ import { createRedisClient } from '../shared/redis';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { getOpenPositions, updatePosition, insertPosition, insertAuditLog } from '../shared/db';
-import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction, createCloseAccountInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { TransactionInstruction } from '@solana/web3.js';
 import { isOperationalWindowActive } from '../shared/operational-window';
 import { rateLimitedRequest, getSolPriceUsd } from './ares';
@@ -142,7 +142,7 @@ export class SentinelAgent {
         if (tokenUsdMap[mint] > 0) {
           prices[mint] = tokenUsdMap[mint] / solUsd;
         } else {
-          // Fallback: Birdeye individual fallback (returns USD, so we must divide by SOL price)
+          // Fallback 1: Birdeye individual fallback (returns USD, so we must divide by SOL price)
           try {
             const birdeyeResp = await axios.get(`https://public-api.birdeye.so/public/price?address=${mint}`, {
               headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || '' },
@@ -152,6 +152,29 @@ export class SentinelAgent {
             prices[mint] = tokenUsdBirdeye > 0 ? tokenUsdBirdeye / solUsd : 0;
           } catch {
             prices[mint] = 0;
+          }
+
+          // Fallback 2: Pump.fun Frontend API Fallback (for unmigrated bonding curve tokens)
+          if (prices[mint] <= 0) {
+            try {
+              const pumpRes = await axios.get(`https://frontend-api-v3.pump.fun/coins/${mint}`, {
+                headers: {
+                  'Origin': 'https://pump.fun',
+                  'Referer': 'https://pump.fun/',
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                },
+                timeout: 5000
+              });
+              const data = pumpRes.data;
+              if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
+                const solRes = Number(data.virtual_sol_reserves);
+                const tokRes = Number(data.virtual_token_reserves);
+                prices[mint] = solRes / (tokRes * 1000.0);
+                console.log(`AGT-06: [PRICE FALLBACK] [PUMP.FUN] Calculated bonding curve price for ${mint.slice(0, 8)}: ${prices[mint]} SOL`);
+              }
+            } catch (pumpErr: any) {
+              console.log(`AGT-06: [PRICE FALLBACK FAILED] for ${mint.slice(0, 8)}: ${pumpErr.message}`);
+            }
           }
         }
       }
@@ -174,6 +197,9 @@ export class SentinelAgent {
     if (currentPrice > 0) {
       position.price_buffer.push(currentPrice);
       if (position.price_buffer.length > PRICE_BUFFER_SIZE) position.price_buffer.shift();
+      if (currentPrice > (position.peak_price_sol || 0)) {
+        position.peak_price_sol = currentPrice;
+      }
     }
 
     // Time-based stop loss (Configurable, default 15m)
@@ -206,7 +232,7 @@ export class SentinelAgent {
         });
 
         const data = res.data;
-        if (data && data.virtual_sol_reserves) {
+        if (data && data.virtual_sol_reserves && !data.complete) {
           const reserves = Number(data.virtual_sol_reserves);
           const progress = ((reserves - 30_000_000_000) / 55_000_000_000) * 100;
 
@@ -335,8 +361,8 @@ export class SentinelAgent {
         const tokensToSell = BigInt(Math.floor(position.tokens_received * portion * 1e6));
 
         // Calculate minSolOutput using constant product
-        // Note: virtual_token_reserves from pump.fun is in whole tokens, multiply by 1e6 to align with tokensToSell (micro-tokens)
-        const vTokenReserves = BigInt(pumpReserves.virtual_token_reserves) * 1000000n;
+        // Note: virtual_token_reserves from pump.fun frontend API is already raw (in micro-tokens, decimals = 6)
+        const vTokenReserves = BigInt(pumpReserves.virtual_token_reserves);
         const vSolReserves = BigInt(pumpReserves.virtual_sol_reserves);
 
         // dS = vSolReserves - (vSolReserves * vTokenReserves) / (vTokenReserves + tokensToSell)
@@ -415,6 +441,31 @@ export class SentinelAgent {
         await this.redis.srem('mtus:active_positions', position.position_id);
 
         await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
+
+        // AUTOMATIC ATA CLOSE & RENT RECLAIM
+        try {
+          const mintPubkey = new PublicKey(position.mint);
+          const ata = getAssociatedTokenAddressSync(mintPubkey, this.keypair!.publicKey, false, tokenProgramId);
+          console.log(`AGT-06: [ATA-RECLAIM] [PUMP] Closing empty ATA: ${ata.toBase58()} for ${position.mint.slice(0, 8)}...`);
+          const closeTx = new Transaction().add(
+            createCloseAccountInstruction(
+              ata,
+              this.keypair!.publicKey,
+              this.keypair!.publicKey,
+              [],
+              tokenProgramId
+            )
+          );
+          const { blockhash } = await connection.getLatestBlockhash();
+          closeTx.recentBlockhash = blockhash;
+          closeTx.feePayer = this.keypair!.publicKey;
+          closeTx.sign(this.keypair!);
+          const sig = await connection.sendRawTransaction(closeTx.serialize());
+          console.log(`AGT-06: [ATA-RECLAIM] [PUMP] ✅ Rent reclaimed successfully! TX: ${sig}`);
+        } catch (reclaimErr: any) {
+          console.warn(`AGT-06: [ATA-RECLAIM] [PUMP] ATA reclaim failed: ${reclaimErr.message}`);
+        }
+
         return;
       }
 
@@ -586,6 +637,34 @@ export class SentinelAgent {
           await this.redis.srem('mtus:active_positions', position.position_id);
 
           await this.redis.publish(eventTypeToChannel(eventType), JSON.stringify(envelope));
+
+          // AUTOMATIC ATA CLOSE & RENT RECLAIM
+          try {
+            const connection = new Connection(process.env.HELIUS_RPC_URL!);
+            const mintPubkey = new PublicKey(inputMint);
+            const ata = getAssociatedTokenAddressSync(mintPubkey, this.keypair.publicKey, false, TOKEN_PROGRAM_ID);
+            
+            console.log(`AGT-06: [ATA-RECLAIM] [JUP] Closing empty ATA: ${ata.toBase58()} for ${inputMint.slice(0, 8)}...`);
+            
+            const closeTx = new Transaction().add(
+              createCloseAccountInstruction(
+                ata,
+                this.keypair.publicKey,
+                this.keypair.publicKey,
+                [],
+                TOKEN_PROGRAM_ID
+              )
+            );
+            const { blockhash } = await connection.getLatestBlockhash();
+            closeTx.recentBlockhash = blockhash;
+            closeTx.feePayer = this.keypair.publicKey;
+            closeTx.sign(this.keypair);
+            
+            const sig = await connection.sendRawTransaction(closeTx.serialize());
+            console.log(`AGT-06: [ATA-RECLAIM] [JUP] ✅ Rent reclaimed successfully! TX: ${sig}`);
+          } catch (reclaimErr: any) {
+            console.warn(`AGT-06: [ATA-RECLAIM] [JUP] ATA reclaim failed: ${reclaimErr.message}`);
+          }
 
           // POST-SELL BALANCE CHECK — ensure sufficient funds for next trade
           try {
