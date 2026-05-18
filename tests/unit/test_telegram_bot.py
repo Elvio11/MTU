@@ -278,8 +278,8 @@ async def test_handle_pubsub_event_trade_failed(bot):
         assert args[0] == "12345"
         assert "mint_flat" in args[1]
         assert "Slippage exceeded" in args[1]
-        assert "Trade Failed" in args[1]
-        assert "Execution failed" in args[1]
+        assert "TRADE SKIPPED/FAILED" in args[1]
+        assert "Waiting for the next setup" in args[1]
 
     # Test Anansi/Python event style (nested payload with 'token')
     python_data = {

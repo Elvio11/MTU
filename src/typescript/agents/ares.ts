@@ -37,7 +37,7 @@ const PRIORITY_FEE_BUFFER = 5000000; // 0.005 SOL - Max priority fee (user-confi
 export async function getJupiterApiVersion(positionSizeSol: number): Promise<{ version: 'v1' | 'v2', usdValue: number }> {
   const solPrice = await getSolPriceUsd();
   const usdValue = positionSizeSol * solPrice;
-  
+
   if (usdValue < 6) {
     return { version: 'v1', usdValue };
   } else {
@@ -53,15 +53,15 @@ export async function canAffordTrade(
 ): Promise<{ ok: boolean; have: number; need: number; breakdown: string }> {
   const LAMPORTS_PER_SOL = 1_000_000_000;
   const balance = await connection.getBalance(walletPubkey);
-  
+
   const positionLamports = positionSol * LAMPORTS_PER_SOL;
   // Total: Trade amount + ATA rent + base tx fee + max priority fee
   const totalNeed = positionLamports + RENT_WSOL + RENT_ATA + FEE_BUFFER + PRIORITY_FEE_BUFFER;
-  
+
   const haveSol = balance / LAMPORTS_PER_SOL;
   const needSol = totalNeed / LAMPORTS_PER_SOL;
-  const breakdown = `Position: ${positionSol} SOL + ATA: ${(RENT_WSOL+RENT_ATA)/LAMPORTS_PER_SOL} SOL + BaseFee: ${FEE_BUFFER/LAMPORTS_PER_SOL} SOL + PriorityFee: ${PRIORITY_FEE_BUFFER/LAMPORTS_PER_SOL} SOL = ${needSol.toFixed(6)} SOL required`;
-  
+  const breakdown = `Position: ${positionSol} SOL + ATA: ${(RENT_WSOL + RENT_ATA) / LAMPORTS_PER_SOL} SOL + BaseFee: ${FEE_BUFFER / LAMPORTS_PER_SOL} SOL + PriorityFee: ${PRIORITY_FEE_BUFFER / LAMPORTS_PER_SOL} SOL = ${needSol.toFixed(6)} SOL required`;
+
   return {
     ok: balance >= totalNeed,
     have: haveSol,
@@ -73,9 +73,9 @@ export async function canAffordTrade(
 // TP/SL Monitoring Helper Functions (used by Sentinel via shared module)
 export async function fetchTokenPrice(mint: string): Promise<number> {
   try {
-    const resp = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`, { 
+    const resp = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`, {
       headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
-      signal: AbortSignal.timeout(5000) 
+      signal: AbortSignal.timeout(5000)
     });
     const data: any = await resp.json();
     return data?.data?.[mint]?.usdPrice || 0;
@@ -106,7 +106,8 @@ class RateLimiter {
   private tradeTimes: number[] = [];
   private activePositions: Set<string> = new Set();
 
-  private config: any; constructor(redis: Redis, config: any) { this.redis = redis; this.config = config;
+  private config: any; constructor(redis: Redis, config: any) {
+    this.redis = redis; this.config = config;
     this.redis = redis;
   }
 
@@ -118,9 +119,9 @@ class RateLimiter {
       console.log(`[RateLimiter] Active positions check: key=${positionsKey}, count=${activeCount}, max=${(this.config?.trading?.max_simultaneous_positions || 1)}`);
 
       if (activeCount >= (this.config?.trading?.max_simultaneous_positions || 1)) {
-        return { 
-          allowed: false, 
-          reason: `Max concurrent positions (${(this.config?.trading?.max_simultaneous_positions || 1)}) reached` 
+        return {
+          allowed: false,
+          reason: `Max concurrent positions (${(this.config?.trading?.max_simultaneous_positions || 1)}) reached`
         };
       }
 
@@ -130,9 +131,9 @@ class RateLimiter {
       const tradeCount = parseInt(await this.redis.get(tradeCountKey) || '0');
 
       if (tradeCount >= (this.config?.trading?.max_trades_per_hour || 3)) {
-        return { 
-          allowed: false, 
-          reason: `Max trades per hour (${(this.config?.trading?.max_trades_per_hour || 3)}) reached` 
+        return {
+          allowed: false,
+          reason: `Max trades per hour (${(this.config?.trading?.max_trades_per_hour || 3)}) reached`
         };
       }
 
@@ -141,9 +142,9 @@ class RateLimiter {
       const dailyPnl = parseFloat(await this.redis.get(dailyPnlKey) || '0');
 
       if (dailyPnl <= -(this.config?.trading?.daily_loss_limit_sol || 0.002)) {
-        return { 
-          allowed: false, 
-          reason: `Daily loss limit (-${(this.config?.trading?.daily_loss_limit_sol || 0.002)} SOL) reached` 
+        return {
+          allowed: false,
+          reason: `Daily loss limit (-${(this.config?.trading?.daily_loss_limit_sol || 0.002)} SOL) reached`
         };
       }
 
@@ -198,21 +199,21 @@ class RateLimiter {
 
 export async function getSolPriceUsd(config?: any): Promise<number> {
   const SOL_MINT = 'So11111111111111111111111111111111111111112';
-  
+
   try {
     return await rateLimitedRequest(async () => {
       // 1. Try Jupiter V3 (Primary)
       try {
-        const response = await axios.get(`https://api.jup.ag/price/v3?ids=${SOL_MINT}`, { 
+        const response = await axios.get(`https://api.jup.ag/price/v3?ids=${SOL_MINT}`, {
           headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
-          timeout: 5000 
+          timeout: 5000
         });
         const price = response.data?.data?.[SOL_MINT]?.usdPrice || response.data?.data?.[SOL_MINT]?.price;
         if (price && typeof price === 'number' && price > 0) {
           lastKnownSolPrice = price;
           return price;
         }
-      } catch (e) {}
+      } catch (e) { }
 
       // 2. Try Binance Public API (Reliable Tertiary for SOL/USDT)
       try {
@@ -222,7 +223,7 @@ export async function getSolPriceUsd(config?: any): Promise<number> {
           lastKnownSolPrice = price;
           return price;
         }
-      } catch (e) {}
+      } catch (e) { }
 
       // 3. Try Birdeye (Fallback)
       try {
@@ -235,7 +236,7 @@ export async function getSolPriceUsd(config?: any): Promise<number> {
           lastKnownSolPrice = price;
           return price;
         }
-      } catch (e) {}
+      } catch (e) { }
 
       throw new Error('All SOL price providers failed');
     }, config);
@@ -305,12 +306,12 @@ export class AresAgent {
   private isPaperMode(): boolean {
     const envVar = process.env.MTUS_ENVIRONMENT;
     if (envVar) return envVar.toLowerCase() === 'paper';
-    
+
     // Fallback to config
     if (this.config?.system?.environment) {
       return this.config.system.environment.toLowerCase() === 'paper';
     }
-    
+
     return true; // Default to safe mode
   }
 
@@ -342,10 +343,10 @@ export class AresAgent {
       console.log('AGT-05: [SYNC] Synchronizing Redis state with PostgreSQL DB...');
       const openPositions = await getOpenPositions.run();
       const positionsKey = 'mtus:active_positions';
-      
+
       // Clear current Redis set to ensure fresh sync
       await this.redis.del(positionsKey);
-      
+
       if (openPositions.length > 0) {
         console.log(`AGT-05: [SYNC] Found ${openPositions.length} open positions in DB. Syncing to Redis...`);
         for (const pos of openPositions) {
@@ -364,7 +365,7 @@ export class AresAgent {
     const keystorePath = process.env.SNIPER_KEYSTORE_PATH || './keystores/sniper.keystore';
     this.keypair = await loadKeypairFromKeystore(keystorePath, passphrase);
     console.log(`AGT-05: Loaded Sniper Wallet: ${this.keypair.publicKey.toBase58()}`);
-    
+
     // Sync with Jupiter CLI if enabled and in production
     if (!this.isPaperMode() && this.config?.trading?.use_jupiter_cli) {
       try {
@@ -376,10 +377,10 @@ export class AresAgent {
         console.warn(`AGT-05: [CLI WARNING] Failed to sync Jupiter CLI: ${e.message}`);
       }
     }
-    
+
     // Verify keypair secret key length (should be 64 bytes for full keypair)
     console.log(`AGT-05: Keypair secret length: ${this.keypair.secretKey.length} bytes`);
-    
+
     // Verify the decrypted keypair matches expected wallet address
     const EXPECTED_WALLET = "ESHH2KcsMWSKoA6ypBGfbpP8Mre3k1QVw4jkypn8A1xc";
     const derivedAddress = this.keypair.publicKey.toBase58();
@@ -427,16 +428,16 @@ export class AresAgent {
         const connection = new Connection(process.env.HELIUS_RPC_URL!);
         const balance = await connection.getBalance(this.keypair.publicKey);
         console.log(`AGT-05: [LIVE] Wallet balance: ${balance / 1e9} SOL`);
-        
+
         // Dynamic Balance Guard - robust check
         const affordability = await canAffordTrade(connection, this.keypair.publicKey, (this.config?.trading?.position_size_sol || 0.0005));
         console.log(`AGT-05: [BALANCE] ${affordability.breakdown}`);
-        
+
         if (!affordability.ok) {
           console.log(`AGT-05: [LIVE] ❌ TRADE ABORTED: Insufficient balance for overhead`);
           console.log(`AGT-05: [BALANCE] Have: ${affordability.have.toFixed(6)} SOL | Need: ${affordability.need.toFixed(6)} SOL`);
           console.log(`AGT-05: [BALANCE] Shortfall: ${(affordability.need - affordability.have).toFixed(6)} SOL`);
-          
+
           // Publish trade_failed event
           const envelope = createEnvelope('AGT-05', 'trade_failed', { mint, error: 'Insufficient balance for trade overhead' }, correlationId);
           await this.redis.publish(CHANNEL_TRADE_FAILED, JSON.stringify(envelope));
@@ -460,17 +461,35 @@ export class AresAgent {
 
         // executeViaCli now handles the full swap using RTSE (auto-slippage)
         const txId = await this.executeViaCli(mint, amountLamports);
-        
+
         if (txId) {
           console.log(`AGT-05: [CLI-SUCCESS] Buy confirmed. Tx: ${txId}`);
-          
+
           // Post-swap: fetch quote for token estimation
           const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${mint}&amount=${amountLamports}&slippageBps=500`;
           const quoteRes = await fetch(quoteUrl, { headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' } });
           const quoteData: any = await quoteRes.json();
-          
+
           const TOKEN_DECIMALS = 6;
-          const tokensReceived = Number(quoteData.outAmount || 0) / Math.pow(10, TOKEN_DECIMALS);
+          let tokensReceived = Number(quoteData.outAmount || 0) / Math.pow(10, TOKEN_DECIMALS);
+
+          // Try to get exact on-chain balance received to avoid any quote discrepancies
+          try {
+            const connection = new Connection(process.env.HELIUS_RPC_URL!);
+            const { getAssociatedTokenAddressSync } = require('@solana/spl-token');
+            const ata = getAssociatedTokenAddressSync(new PublicKey(mint), this.keypair!.publicKey);
+            const balRes = await connection.getTokenAccountBalance(ata);
+            if (balRes && balRes.value && balRes.value.amount) {
+              const actualReceived = Number(balRes.value.amount) / Math.pow(10, TOKEN_DECIMALS);
+              if (actualReceived > 0) {
+                tokensReceived = actualReceived;
+                console.log(`AGT-05: [CLI-SUCCESS] On-chain balance confirmed: ${tokensReceived} tokens`);
+              }
+            }
+          } catch (e: any) {
+            console.warn(`AGT-05: Post-swap on-chain balance check fallback to quote: ${e.message}`);
+          }
+
           const entryPriceSol = (this.config?.trading?.position_size_sol || 0.0005) / tokensReceived;
 
           const position = {
@@ -488,7 +507,7 @@ export class AresAgent {
 
           await insertPosition.run(position);
           await this.rateLimiter.recordTrade(correlationId);
-          
+
           const envelope = createEnvelope('AGT-05', 'position_opened', {
             ...position,
             tx_signature: txId
@@ -520,9 +539,9 @@ export class AresAgent {
         const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${mint}&amount=${amount}&slippageBps=1000`;
 
         try {
-          const quoteRes = await fetch(quoteUrl, { 
+          const quoteRes = await fetch(quoteUrl, {
             headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
-            signal: AbortSignal.timeout(10000) 
+            signal: AbortSignal.timeout(10000)
           });
           if (!quoteRes.ok) throw new Error(`Quote failed: ${quoteRes.status}`);
           const quoteData: any = await quoteRes.json();
@@ -591,15 +610,15 @@ export class AresAgent {
   private async executeViaCli(mint: string, amountLamports: number, slippageBps: number = 0): Promise<string> {
     try {
       console.log(`AGT-05: [CLI-SWAP] Executing (RTSE AUTO-SLIPPAGE): SOL → ${mint.slice(0, 8)}... (${amountLamports} lamports)`);
-      
+
       const cmd = `jup spot swap --from SOL --to ${mint} --raw-amount ${amountLamports} --key sniper -f json`;
       const output = execSync(cmd).toString();
       const result = JSON.parse(output);
-      
+
       if (result.error) {
         throw new Error(result.error);
       }
-      
+
       return result.signature || result.txid || '';
     } catch (e: any) {
       console.error(`AGT-05: [CLI-ERROR] CLI swap failed: ${e.message}`);
@@ -618,7 +637,7 @@ export class AresAgent {
     }
   }
 
-async run(): Promise<void> {
+  async run(): Promise<void> {
     this.running = true;
     console.log(`AGT-05: [STARTED] Ares Agent running...`);
 
@@ -627,7 +646,7 @@ async run(): Promise<void> {
     while (this.running) {
       try {
         const { allowed } = await this.rateLimiter.canTrade();
-        
+
         if (!allowed) {
           // If we can't trade (e.g., max positions reached), wait before checking again
           await new Promise(r => setTimeout(r, 5000));
@@ -637,16 +656,16 @@ async run(): Promise<void> {
         // We have a slot! Wait for an item in the queue (blocking pop for 2 seconds)
         // Anansi uses lpush to "event:trade_approved:0"
         const result = await this.redis.brpop('event:trade_approved:0', 2);
-        
+
         if (result) {
           const [queueName, message] = result;
           const envelope = JSON.parse(message) as AgentMessageEnvelope;
-          
+
           if (envelope.agent_id !== 'AGT-05') {
             console.log(`AGT-05: [QUEUE] Dequeued trade_approved for ${envelope.payload?.mint?.slice(0, 8) || envelope.payload?.token?.mint?.slice(0, 8)}...`);
             const mint = envelope.payload?.token?.mint || envelope.payload?.mint;
             const isPump = envelope.payload?.is_pump || false;
-            
+
             // Execute trade
             await this.executeTrade(mint, envelope.correlation_id, isPump);
           }
@@ -659,7 +678,7 @@ async run(): Promise<void> {
     if (this.redis) {
       try {
         // cleanup if needed
-      } catch (e) {}
+      } catch (e) { }
     }
   }
 }

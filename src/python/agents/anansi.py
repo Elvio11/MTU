@@ -20,6 +20,7 @@ from src.python.shared.constants import (
     CHANNEL_TRADE_FAILED,
     CHANNEL_TOKEN_RECEIVED,
     CHANNEL_TOKEN_TA_SCORED,
+    CHANNEL_TOKEN_QUALIFIED,
 )
 
 load_dotenv("./.env")
@@ -242,24 +243,29 @@ class AnansiAgent:
             return False
 
     async def check_g6_rugcheck_score(
-        self, mint: str, is_graduated: bool = False
+        self, mint: str, is_graduated: bool = False, token_payload: Dict[str, Any] = None
     ) -> bool:
+        score = 0
+        data = None
+        try:
+            data = await self._fetch_rugcheck_summary(mint)
+            if data:
+                score = data.get("score", 0)
+        except Exception:
+            pass
+
+        if token_payload is not None:
+            token_payload["rugcheck_score"] = score
+
         if is_graduated:
             print(f"AGT-03: G6 - Graduated token, skipping RugCheck score gate")
             return True
             
         try:
-            data = await self._fetch_rugcheck_summary(mint)
             if not data:
-                if is_graduated:
-                    print(
-                        f"AGT-03: G6 - No RugCheck data for graduated token, assuming safe"
-                    )
-                    return True
                 print(f"AGT-03: G6 - No RugCheck data available")
                 return False
 
-            score = data.get("score", 1000)
             max_score = self.config.get("qualification", {}).get(
                 "max_rugcheck_score", 999
             )
@@ -349,7 +355,9 @@ class AnansiAgent:
             print(f"AGT-03: G4 check failed: {e}")
             return False
 
-    async def check_g5_top10_concentration(self, mint: str) -> bool:
+    async def check_g5_top10_concentration(
+        self, mint: str, token_payload: Dict[str, Any] = None
+    ) -> bool:
         print(f"AGT-03: G5 Checking top 10 concentration for {mint[:20]}...")
         rpc_url = await self.get_rpc_url()
         try:
@@ -370,10 +378,14 @@ class AnansiAgent:
 
             if "result" not in data or not data["result"].get("value"):
                 print(f"AGT-03: G5 - No accounts found")
+                if token_payload is not None:
+                    token_payload["top10_holders_pct"] = 0.0
                 return False
 
             accounts = data["result"]["value"]
             if not accounts:  # pragma: no cover
+                if token_payload is not None:
+                    token_payload["top10_holders_pct"] = 0.0
                 return False  # pragma: no cover
 
             supply_payload = {
@@ -401,6 +413,8 @@ class AnansiAgent:
             )
 
             if total_supply_readable == 0:
+                if token_payload is not None:
+                    token_payload["top10_holders_pct"] = 0.0
                 return False
 
             top10_holding = 0.0
@@ -412,6 +426,9 @@ class AnansiAgent:
                 pct = (ui_amount / total_supply_readable) * 100
                 top10_holding += pct
 
+            if token_payload is not None:
+                token_payload["top10_holders_pct"] = top10_holding
+
             max_top10 = self.config.get("qualification", {}).get(
                 "max_top10_concentration", 99.0
             )
@@ -421,6 +438,8 @@ class AnansiAgent:
             return top10_holding < max_top10
         except Exception as e:
             print(f"AGT-03: G5 check failed: {e}")
+            if token_payload is not None:
+                token_payload["top10_holders_pct"] = 0.0
             return False
 
     async def check_g8_social_metadata(self, uri: str) -> bool:
@@ -577,6 +596,27 @@ class AnansiAgent:
 
         try:
             self._rugcheck_cache.clear()
+            
+            # Fetch DexScreener volume for 1h/24h if possible to avoid N/A in alerts
+            try:
+                import requests
+                resp = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}", timeout=5)
+                if resp.status_code == 200:
+                    dex_data = resp.json()
+                    pairs = dex_data.get("pairs", [])
+                    if pairs:
+                        pair = pairs[0]
+                        volume_1h = float(pair.get("volume", {}).get("h1", 0.0))
+                        volume_24h = float(pair.get("volume", {}).get("h24", 0.0))
+                        token_payload["volume"] = volume_1h
+                        token_payload["volume_24h"] = volume_24h
+                        token_payload["volume_1h"] = volume_1h
+                        print(f"AGT-03: Fetched DexScreener volume for {symbol}: 1h=${volume_1h:,.2f}, 24h=${volume_24h:,.2f}")
+                    else:
+                        print(f"AGT-03: No pairs found on DexScreener for {symbol}")
+            except Exception as e:
+                print(f"AGT-03: Failed to fetch DexScreener volume: {e}")
+
             print(
                 f"AGT-03: [{'PAPER' if self.is_paper_mode else 'PROD'}] Qualifying {symbol} (Graduated: {is_graduated}, TA: {ta_signal})"
             )
@@ -631,8 +671,9 @@ class AnansiAgent:
             gates_passed.append("G4")
 
             # G5
+            g5_passed = await self.check_g5_top10_concentration(mint, token_payload)
             if not self.is_paper_mode or is_mocked("check_g5_top10_concentration"):
-                if await self.check_g5_top10_concentration(mint):
+                if g5_passed:
                     gates_passed.append("G5")
                 else:
                     gates_failed.append("G5")
@@ -640,8 +681,9 @@ class AnansiAgent:
                 gates_passed.append("G5")
 
             # G6
+            g6_passed = await self.check_g6_rugcheck_score(mint, is_graduated, token_payload)
             if not self.is_paper_mode or is_mocked("check_g6_rugcheck_score"):
-                if await self.check_g6_rugcheck_score(mint, is_graduated):
+                if g6_passed:
                     gates_passed.append("G6")
                 else:
                     gates_failed.append("G6")
@@ -786,6 +828,16 @@ class AnansiAgent:
             )
             await self.redis.publish(CHANNEL_TRADE_APPROVED, envelope.model_dump_json())
             await self.redis.lpush("event:trade_approved:0", envelope.model_dump_json())
+            
+            # Publish to mtus:channel:token_qualified for Telegram notifications
+            qualified_envelope = AgentMessageEnvelope(
+                agent_id="AGT-03",
+                event_type="token_qualified",
+                payload=token_payload,
+                correlation_id=correlation_id,
+            )
+            await self.redis.publish(CHANNEL_TOKEN_QUALIFIED, qualified_envelope.model_dump_json())
+            
             print(
                 f"AGT-03: Token {symbol} qualified -> trade_approved (gates: {gates_passed})"
             )

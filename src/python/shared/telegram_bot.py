@@ -907,7 +907,16 @@ Need {trades_needed} more paper trades with >40% win rate.""",
             mint = payload.get("mint", "N/A")
             size_sol = float(payload.get("position_size_sol") or payload.get("size_sol") or 0.0)
             entry_price = float(payload.get("entry_price_sol") or payload.get("entryPriceSol") or 0.0)
-            text = NotificationTemplates.trade_opened(pos_id, mint, size_sol, entry_price)
+            tp1_price = payload.get("tp1_price") or payload.get("tp1Price")
+            tp2_price = payload.get("tp2_price") or payload.get("tp2Price")
+            sl_price = payload.get("sl_price") or payload.get("slPrice")
+            
+            # Map None/Missing values to floats if present, otherwise let trade_opened use its defaults
+            tp1_val = float(tp1_price) if tp1_price is not None else None
+            tp2_val = float(tp2_price) if tp2_price is not None else None
+            sl_val = float(sl_price) if sl_price is not None else None
+            
+            text = NotificationTemplates.trade_opened(pos_id, mint, size_sol, entry_price, tp1_val, tp2_val, sl_val)
             
         elif channel == "mtus:channel:position_closed":
             pos_id = payload.get("position_id") or payload.get("positionId") or data.get("correlation_id", "N/A")

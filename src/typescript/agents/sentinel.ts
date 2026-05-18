@@ -67,12 +67,12 @@ export class SentinelAgent {
   private isPaperMode(): boolean {
     const envVar = process.env.MTUS_ENVIRONMENT;
     if (envVar) return envVar.toLowerCase() === 'paper';
-    
+
     // Fallback to config
     if (this.config?.system?.environment) {
       return this.config.system.environment.toLowerCase() === 'paper';
     }
-    
+
     return true; // Default to safe mode
   }
 
@@ -104,7 +104,7 @@ export class SentinelAgent {
       const p = path.join(process.cwd(), 'config', 'config.yaml');
       this.config = yaml.load(fs.readFileSync(p, 'utf8')) as any;
       console.log('AGT-06: Config loaded');
-    } catch(e) {
+    } catch (e) {
       this.config = { trading: { tp1_multiplier: 2.0, tp2_multiplier: 5.0, sl_multiplier: 0.7, trailing_stop_pct: 15 } };
     }
   }
@@ -122,22 +122,22 @@ export class SentinelAgent {
     if (mints.length === 0) return prices;
     try {
       const solUsd = await getSolPriceUsd(this.config);
-      
+
       const mintsParam = mints.join(',');
       const tokenUsdMap = await rateLimitedRequest(async () => {
         // v3 price API is the stable batch endpoint
-        const resp = await axios.get(`https://api.jup.ag/price/v3?ids=${mintsParam}`, { 
+        const resp = await axios.get(`https://api.jup.ag/price/v3?ids=${mintsParam}`, {
           headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' },
-          timeout: 5000 
+          timeout: 5000
         });
         const data = resp.data;
         const result: Record<string, number> = {};
         for (const mint of mints) {
-          result[mint] = Number(data?.data?.[mint]?.usdPrice || 0);
+          result[mint] = Number(data?.[mint]?.usdPrice || 0);
         }
         return result;
       }, this.config);
-      
+
       for (const mint of mints) {
         if (tokenUsdMap[mint] > 0) {
           prices[mint] = tokenUsdMap[mint] / solUsd;
@@ -183,7 +183,7 @@ export class SentinelAgent {
     if (timeSlHours > 0) {
       const timeSlMs = timeSlHours * 60 * 60 * 1000;
       if (position.state !== 'CLOSED' && (now - entryTime) > timeSlMs) {
-        console.log(`AGT-06: [TIME STOP] Position ${position.position_id} hit ${timeSlHours}h limit (${Math.floor((now-entryTime)/60000)}m elapsed). Closing.`);
+        console.log(`AGT-06: [TIME STOP] Position ${position.position_id} hit ${timeSlHours}h limit (${Math.floor((now - entryTime) / 60000)}m elapsed). Closing.`);
         position.state = 'STOP_LOSS';
         await this.sellPortion(position, 1.0, 'time_sl_hit');
         return;
@@ -204,12 +204,12 @@ export class SentinelAgent {
           },
           timeout: 5000
         });
-        
+
         const data = res.data;
         if (data && data.virtual_sol_reserves) {
           const reserves = Number(data.virtual_sol_reserves);
           const progress = ((reserves - 30_000_000_000) / 55_000_000_000) * 100;
-          
+
           if (progress >= exitProgressThreshold) {
             console.log(`AGT-06: [MATURITY EXIT] Position ${position.position_id} reached ${progress.toFixed(2)}% progress. Closing.`);
             position.state = 'CLOSED';
@@ -261,7 +261,7 @@ export class SentinelAgent {
     try {
       const mint = position.mint;
       const mintPubkey = new PublicKey(mint);
-      
+
       // Check if it's a Pump.fun token still on bonding curve
       let isPump = false;
       let pumpReserves: any = null;
@@ -283,9 +283,9 @@ export class SentinelAgent {
         // PUMP.FUN DIRECT SELL PATH
         // ==========================================
         console.log(`AGT-06: [PUMP-SELL] Direct sell for ${mint.slice(0, 8)}...`);
-        
+
         if (this.isPaperMode()) {
-          console.log(`AGT-06: [PAPER] Simulated PUMP sell ${portion*100}% for ${mint}`);
+          console.log(`AGT-06: [PAPER] Simulated PUMP sell ${portion * 100}% for ${mint}`);
           const exitPriceSol = position.peak_price_sol;
           const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
           const paperTxId = `paper_pump_sell_${Date.now()}`;
@@ -320,7 +320,7 @@ export class SentinelAgent {
 
         const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=' + process.env.HELIUS_KEY;
         const connection = new Connection(HELIUS_RPC_URL);
-        
+
         const [bondingCurve] = PublicKey.findProgramAddressSync(
           [Buffer.from('bonding-curve'), mintPubkey.toBuffer()],
           PUMP_PROGRAM_ID
@@ -333,28 +333,28 @@ export class SentinelAgent {
         const associatedUser = getAssociatedTokenAddressSync(mintPubkey, this.keypair!.publicKey, false, tokenProgramId);
 
         const tokensToSell = BigInt(Math.floor(position.tokens_received * portion * 1e6));
-        
+
         // Calculate minSolOutput using constant product
         // Note: virtual_token_reserves from pump.fun is in whole tokens, multiply by 1e6 to align with tokensToSell (micro-tokens)
         const vTokenReserves = BigInt(pumpReserves.virtual_token_reserves) * 1000000n;
         const vSolReserves = BigInt(pumpReserves.virtual_sol_reserves);
-        
+
         // dS = vSolReserves - (vSolReserves * vTokenReserves) / (vTokenReserves + tokensToSell)
         const expectedSol = vSolReserves - (vSolReserves * vTokenReserves) / (vTokenReserves + tokensToSell);
-        
+
         let minSolOutput = (expectedSol * 90n) / 100n; // 10% slippage for safety
 
         // DUST CLEANUP: If PnL < -95%, force exit by setting min output to 1 lamport
         const exitPriceSol = (Number(expectedSol) / 1e9) / (Number(tokensToSell) / 1e6);
         const pnl = exitPriceSol / position.entry_price_sol;
-        
+
         if (pnl < 0.05) {
-          console.log(`AGT-06: [DUST-CLEANUP] Position ${position.position_id} at -${((1-pnl)*100).toFixed(2)}% PnL. Forcing exit.`);
-          minSolOutput = 1n; 
+          console.log(`AGT-06: [DUST-CLEANUP] Position ${position.position_id} at -${((1 - pnl) * 100).toFixed(2)}% PnL. Forcing exit.`);
+          minSolOutput = 1n;
         }
 
         const transaction = new Transaction();
-        
+
         // Pump.fun Sell Instruction
         // Discriminator: [51, 230, 133, 164, 1, 127, 131, 173]
         const instructionData = Buffer.alloc(24);
@@ -423,8 +423,50 @@ export class SentinelAgent {
       // ==========================================
       const inputMint = position.mint;
       const outputMint = 'So11111111111111111111111111111111111111112';
-      const amount = Math.floor(position.tokens_received * portion * 1e6);
       
+      let amount = Math.floor(position.tokens_received * portion * 1e6);
+      
+      // Attempt to fetch actual on-chain token balance of the wallet to prevent "Insufficient funds" errors
+      try {
+        const connection = new Connection(process.env.HELIUS_RPC_URL!);
+        const ata = getAssociatedTokenAddressSync(new PublicKey(inputMint), this.keypair.publicKey);
+        let actualBalRaw = 0;
+        
+        // Retry loop to account for RPC indexing lag on newly created accounts
+        for (let i = 0; i < 3; i++) {
+          try {
+            const balRes = await connection.getTokenAccountBalance(ata);
+            if (balRes && balRes.value && balRes.value.amount) {
+              actualBalRaw = Number(balRes.value.amount);
+              break;
+            }
+          } catch (e) {
+            if (i === 2) {
+              // RPC failed to find account (lag) — fall back to Jupiter CLI portfolio
+              try {
+                const out = execSync("jup spot portfolio --key sniper -f json").toString();
+                const portfolio = JSON.parse(out);
+                const token = (portfolio.tokens || []).find((t: any) => t.id === inputMint);
+                if (token && token.rawAmount) {
+                  actualBalRaw = Number(token.rawAmount);
+                }
+              } catch (cliErr: any) {
+                console.warn(`AGT-06: [SELL] Both RPC and CLI portfolio balance checks failed for ${inputMint.slice(0, 8)}: ${cliErr.message}`);
+              }
+            } else {
+              await new Promise(r => setTimeout(r, 1000)); // Sleep 1s before retry
+            }
+          }
+        }
+
+        if (actualBalRaw > 0) {
+          amount = portion === 1 ? actualBalRaw : Math.min(actualBalRaw, Math.floor(actualBalRaw * portion));
+          console.log(`AGT-06: [SELL] Found actual on-chain balance for ${inputMint.slice(0, 8)}: ${actualBalRaw} raw. Selling ${amount} raw.`);
+        }
+      } catch (e: any) {
+        console.warn(`AGT-06: [SELL] Could not fetch actual token balance, falling back to DB estimate: ${e.message}`);
+      }
+
 
       // Helper: Determine which Jupiter API to use based on USD value
       let apiVersion = 'v1';
@@ -435,10 +477,10 @@ export class SentinelAgent {
       } catch {
         apiVersion = 'v1'; // Default to v1
       }
-      
+
       // Slippage ladder for v1, RTSE for v2 (no slippageBps)
       let SLIPPAGE_LADDER = [500, 1000, 1500];  // 5%, 10%, 15%
-      
+
       // DUST CLEANUP: If token value is very low (< $0.50), use aggressive slippage to ensure exit
       try {
         const price = await this.fetchPrice(inputMint);
@@ -454,7 +496,7 @@ export class SentinelAgent {
       }
 
       console.log(`AGT-06: [SELL] Fetching quote for PnL estimation: ${inputMint.slice(0, 8)} → SOL...`);
-      
+
       let quote: QuoteResponse | null = null;
       try {
         const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=500`;
@@ -465,16 +507,16 @@ export class SentinelAgent {
       } catch (e) {
         console.warn(`AGT-06: [SELL] Quote fetch failed, using fallback for PnL`);
       }
-      
-      const exitPriceSol = quote && quote.outAmount 
-        ? (Number(quote.outAmount) / 1e9) / (position.tokens_received * portion) 
+
+      const exitPriceSol = quote && quote.outAmount
+        ? (Number(quote.outAmount) / 1e9) / (position.tokens_received * portion)
         : position.peak_price_sol;
       console.log(`AGT-06: [${this.isPaperMode() ? 'PAPER' : 'LIVE'}] Exit estimate for ${position.mint}: ${exitPriceSol} SOL`);
-      
+
       if (this.isPaperMode()) {
         const paperTxId = `paper_sell_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        console.log(`AGT-06: [PAPER] Simulated sell ${portion*100}% for ${position.mint}, exit price: ${exitPriceSol} SOL`);
-        
+        console.log(`AGT-06: [PAPER] Simulated sell ${portion * 100}% for ${position.mint}, exit price: ${exitPriceSol} SOL`);
+
         const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
 
         const envelope = createEnvelope('AGT-06', eventType, {
@@ -513,12 +555,12 @@ export class SentinelAgent {
       console.log(`AGT-06: [CLI-MODE] Initializing sell via Jupiter CLI binary...`);
       try {
         const txId = await this.executeViaCli(inputMint, 'So11111111111111111111111111111111111111112', amount);
-        
+
         if (txId) {
           console.log(`AGT-06: ${eventType} for ${position.mint} (CLI SUCCESS), tx: ${txId}`);
-          
+
           const realised_pnl_sol = (exitPriceSol - position.entry_price_sol) * (position.tokens_received * portion);
-          
+
           const envelope = createEnvelope('AGT-06', eventType, {
             position_id: position.position_id,
             mint: position.mint,
@@ -527,7 +569,7 @@ export class SentinelAgent {
             realised_pnl_sol: realised_pnl_sol,
             tx_signature: txId,
           });
-          
+
           await updatePosition.run({
             position_id: position.position_id,
             state: 'CLOSED',
@@ -566,7 +608,7 @@ export class SentinelAgent {
         }
       } catch (cliErr: any) {
         // CLI failed (e.g. zero balance, network error) — mark FAILED and evict so we never retry
-        console.error(`AGT-06: [CLI-FAIL] CLI sell failed for ${position.mint.slice(0,8)}: ${cliErr.message}`);
+        console.error(`AGT-06: [CLI-FAIL] CLI sell failed for ${position.mint.slice(0, 8)}: ${cliErr.message}`);
         position.state = 'FAILED';
         this.positions.delete(position.position_id);
         await this.redis.srem('mtus:active_positions', position.position_id);
@@ -583,7 +625,7 @@ export class SentinelAgent {
       }
     } catch (error: any) {
       // Outer guard — evict position to prevent infinite retry
-      console.log(`AGT-06: [SELL-ERROR] Unexpected sell error for ${position.mint.slice(0,8)}: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
+      console.log(`AGT-06: [SELL-ERROR] Unexpected sell error for ${position.mint.slice(0, 8)}: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
       position.state = 'FAILED';
       this.positions.delete(position.position_id);
       await this.redis.srem('mtus:active_positions', position.position_id);
@@ -597,7 +639,7 @@ export class SentinelAgent {
         console.log('AGT-06: No open positions found in DB to recover.');
         return;
       }
-      
+
       console.log(`AGT-06: Recovering ${openPositions.length} positions from DB...`);
       for (const p of openPositions) {
         const position: Position = {
@@ -628,7 +670,7 @@ export class SentinelAgent {
       if (!envelope || !envelope.payload) return;
 
       const { mint, entry_price_sol, tokens_received, position_id } = envelope.payload;
-      
+
       const entryPriceSol = entry_price_sol ?? envelope.payload.entryPriceSol ?? 0;
       const tokensReceived = tokens_received ?? envelope.payload.tokensReceived ?? 0;
       const positionId = position_id ?? envelope.payload.positionId ?? envelope.correlation_id;
@@ -654,7 +696,7 @@ export class SentinelAgent {
 
       this.positions.set(positionId, position);
       console.log(`AGT-06: Monitoring new position: ${mint} at ${entryPriceSol} SOL`);
-      
+
       // Auto-save to DB to keep in sync
       await insertPosition.run({
         ...position,
@@ -677,13 +719,13 @@ export class SentinelAgent {
     const activePositions = Array.from(this.positions.entries()).filter(
       ([_, p]) => p.state !== 'CLOSED' && p.state !== 'FAILED'
     );
-    
+
     // Clean up closed/failed positions from map
     for (const [id, position] of this.positions) {
-       if (position.state === 'CLOSED' || position.state === 'FAILED') {
-         this.positions.delete(id);
-         await this.redis.srem('mtus:active_positions', id);
-       }
+      if (position.state === 'CLOSED' || position.state === 'FAILED') {
+        this.positions.delete(id);
+        await this.redis.srem('mtus:active_positions', id);
+      }
     }
 
     if (activePositions.length === 0) return;
@@ -696,12 +738,12 @@ export class SentinelAgent {
     for (const [id, position] of activePositions) {
       const price = batchPrices[position.mint] || 0;
       await this.updatePositionState(position, price);
-      
+
       if (price > 0) {
         const entryPrice = position.entry_price_sol || 0.001;
         const pnlPct = ((price - entryPrice) / entryPrice) * 100;
         console.log(`AGT-06: [MONITOR] ${position.mint.slice(0, 8)} | Price: ${price.toFixed(9)} SOL | PnL: ${pnlPct.toFixed(2)}% | State: ${position.state} | Batch Size: ${mintsToFetch.length}`);
-        
+
         // Update peak price in DB if it increased
         if (price > (position.peak_price_sol || 0)) {
           await updatePosition.run({
@@ -718,7 +760,7 @@ export class SentinelAgent {
   async run(): Promise<void> {
     console.log(`AGT-06: [STARTING] Sentinel v${VERSION}`);
     this.running = true;
-    
+
     // Subscriber setup
     let subscriber: Redis | null = null;
     let isSubscribed = false;
@@ -780,15 +822,15 @@ export class SentinelAgent {
   private async executeViaCli(fromMint: string, toMint: string, amountRaw: number): Promise<string> {
     try {
       console.log(`AGT-06: [CLI-SELL] Executing (RTSE AUTO-SLIPPAGE): ${fromMint.slice(0, 8)} → ${toMint.slice(0, 8)}... (${amountRaw} raw)`);
-      
+
       const cmd = `jup spot swap --from ${fromMint} --to ${toMint} --raw-amount ${amountRaw} --key sniper -f json`;
       const output = execSync(cmd).toString();
       const result = JSON.parse(output);
-      
+
       if (result.error) {
         throw new Error(result.error);
       }
-      
+
       return result.signature || result.txid || '';
     } catch (e: any) {
       console.error(`AGT-06: [CLI-ERROR] CLI swap failed: ${e.message}`);
